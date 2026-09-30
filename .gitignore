@@ -1,0 +1,7 @@
+*.exe
+*.o
+*.obj
+diary.dat
+debug_log.txt
+*.log
+diary_widget_v1_backup.cpp
