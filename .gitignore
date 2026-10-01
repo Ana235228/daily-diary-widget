@@ -1,7 +1,26 @@
+# Compiled files
 *.exe
 *.o
 *.obj
+
+# User data (personal!)
 diary.dat
+habits.dat
 debug_log.txt
 *.log
-diary_widget_v1_backup.cpp
+
+# Backups
+*.bak
+*_backup.cpp
+
+# Python scripts (temporary)
+apply_*.py
+fix_defines.py
+
+# Text blocks (temporary)
+*.txt
+
+# IDE
+.vscode/
+.idea/
+*.user

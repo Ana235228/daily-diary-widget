@@ -29,23 +29,28 @@
 #define CLR_ACCENT2     RGB(212, 168, 92)
 #define CLR_ACCENT3     RGB(122, 155, 118)
 
-#define WIN_W            560
-#define WIN_H            680
-#define UI_PAD           28
-#define UI_HEADER_H      90
-#define UI_INPUT_Y       110
-#define UI_INPUT_H       52
-#define UI_BTN_Y         174
-#define UI_BTN_H         42
-#define UI_BTN_GAP       10
-#define UI_PROG_Y        232
-#define UI_LIST_TOP      288
-#define UI_LIST_BOTTOM   660
-#define UI_LIST_H        (UI_LIST_BOTTOM - UI_LIST_TOP)
-#define UI_CARD_H        52
-#define UI_CARD_GAP      8
-#define UI_ROW           (UI_CARD_H + UI_CARD_GAP)
-#define ID_TIMER_CARET   2
+#define WIN_W             560
+#define WIN_H             800
+#define UI_PAD            28
+#define UI_HEADER_H       185
+#define UI_BODY_TOP       UI_HEADER_H
+#define UI_RING_D         88
+#define UI_RING_CY        62
+#define UI_STREAK_Y       114
+#define UI_STREAK_H       26
+#define UI_STRIP_Y        148
+#define UI_STRIP_H        28
+#define UI_INPUT_H        52
+#define UI_BTN_H          42
+#define UI_BTN_GAP        10
+#define UI_CARD_H         52
+#define UI_CARD_GAP       8
+#define UI_ROW            (UI_CARD_H + UI_CARD_GAP)
+#define HAB_ROW_H         40
+#define MAX_HABITS        50
+#define HAB_NAME_MAX      64
+#define ID_TIMER_CARET    2
+#define STREAK_REQUIRE_ALL 1
 
 static const COLORREF CLR_PRIO[3] = {
     RGB(122, 155, 118),
@@ -90,33 +95,6 @@ typedef struct {
 Zapis diary[MAX_ZAPISEY];
 int count = 0;
 
-// ===== Состояние главного окна =====
-enum { H_NONE = 0, H_ADD, H_DEL, H_HIDE, H_INPUT, H_PRIO, H_CHECK, H_CARD };
-struct Hit { int kind; int idx; };
-
-static Hit  g_hover    = { H_NONE, -1 };
-static wchar_t g_input[MAX_DLINA] = L"";
-static int  g_inputLen = 0;
-static int  g_newPrio  = 2;
-static int  g_scroll   = 0;
-static int  g_selected = -1;
-static bool g_caretOn  = true;
-static bool g_tracking = false;
-
-static struct {
-    HFONT title, seg9, seg10, seg11, seg11i, seg11s, btn, geo16;
-} gF = {0};
-
-static int maxScroll() {
-    int content = count > 0 ? count * UI_ROW - UI_CARD_GAP : 0;
-    int m = content - UI_LIST_H;
-    return m > 0 ? m : 0;
-}
-static void clampScroll() {
-    int m = maxScroll();
-    if (g_scroll > m) g_scroll = m;
-    if (g_scroll < 0) g_scroll = 0;
-}
 
 HINSTANCE hInst;
 HWND hMainWnd = NULL;
@@ -159,6 +137,67 @@ static void drawDot(HDC dc, int cx, int cy, int r, COLORREF c) {
     g.FillEllipse(&br, (Gdiplus::REAL)(cx - r), (Gdiplus::REAL)(cy - r),
                   (Gdiplus::REAL)(2 * r), (Gdiplus::REAL)(2 * r));
 }
+
+// ===== Playfair Display =====
+static const wchar_t *g_displayFace = L"Georgia";
+static int g_displayWeight = FW_NORMAL;
+
+static const wchar_t *kFontFiles[12] = {
+    L"PlayfairDisplay-Black.ttf",      L"PlayfairDisplay-BlackItalic.ttf",
+    L"PlayfairDisplay-Bold.ttf",       L"PlayfairDisplay-BoldItalic.ttf",
+    L"PlayfairDisplay-ExtraBold.ttf",  L"PlayfairDisplay-ExtraBoldItalic.ttf",
+    L"PlayfairDisplay-Italic.ttf",     L"PlayfairDisplay-Medium.ttf",
+    L"PlayfairDisplay-MediumItalic.ttf", L"PlayfairDisplay-Regular.ttf",
+    L"PlayfairDisplay-SemiBold.ttf",   L"PlayfairDisplay-SemiBoldItalic.ttf"
+};
+static wchar_t g_fontLoaded[12][MAX_PATH];
+
+static bool faceAvailable(const wchar_t *face, int weight) {
+    HDC dc = GetDC(NULL);
+    HFONT f = CreateFontW(-40, 0, 0, 0, weight, TRUE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE, face);
+    HGDIOBJ old = SelectObject(dc, f);
+    wchar_t actual[LF_FACESIZE] = {0};
+    GetTextFaceW(dc, LF_FACESIZE, actual);
+    SelectObject(dc, old);
+    DeleteObject(f);
+    ReleaseDC(NULL, dc);
+    return _wcsicmp(actual, face) == 0;
+}
+
+static void loadAppFonts() {
+    wchar_t dir[MAX_PATH];
+    GetModuleFileNameW(NULL, dir, MAX_PATH);
+    wchar_t *slash = wcsrchr(dir, L'\\');
+    if (slash) *(slash + 1) = 0;
+
+    for (int i = 0; i < 12; i++) {
+        g_fontLoaded[i][0] = 0;
+        wchar_t path[MAX_PATH];
+        swprintf(path, MAX_PATH, L"%ls%ls", dir, kFontFiles[i]);
+        if (AddFontResourceExW(path, FR_PRIVATE, 0) > 0) {
+            wcscpy(g_fontLoaded[i], path);
+        } else if (AddFontResourceExW(kFontFiles[i], FR_PRIVATE, 0) > 0) {
+            wcscpy(g_fontLoaded[i], kFontFiles[i]);
+        }
+    }
+
+    if (faceAvailable(L"Playfair Display Black", FW_NORMAL)) {
+        g_displayFace = L"Playfair Display Black"; g_displayWeight = FW_NORMAL;
+    } else if (faceAvailable(L"Playfair Display", FW_BLACK)) {
+        g_displayFace = L"Playfair Display";       g_displayWeight = FW_BLACK;
+    } else {
+        OutputDebugStringW(L"[planner] Playfair Display not found, using Georgia\n");
+    }
+}
+
+static void unloadAppFonts() {
+    for (int i = 0; i < 12; i++)
+        if (g_fontLoaded[i][0])
+            RemoveFontResourceExW(g_fontLoaded[i], FR_PRIVATE, 0);
+}
+
 
 HICON createDiaryIcon(int size, BOOL gray) {
     using namespace Gdiplus;
@@ -297,6 +336,191 @@ void getCurrentTime(wchar_t *buffer) {
     swprintf(buffer, 6, L"%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
 }
 
+// ===== Состояние и данные главного окна =====
+enum { H_NONE = 0, H_ADD, H_DEL, H_HIDE, H_INPUT, H_PRIO, H_CHECK, H_CARD,
+       H_HAB_CHECK, H_HAB_DEL, H_HAB_ROW, H_HAB_ADDBTN, H_HAB_INPUT, H_HAB_OK };
+struct Hit { int kind; int idx; int idx2; };
+enum { FOCUS_TASK = 0, FOCUS_HABIT };
+
+static Hit  g_hover    = { H_NONE, -1, -1 };
+static wchar_t g_input[MAX_DLINA] = L"";
+static int  g_inputLen = 0;
+static int  g_newPrio  = 2;
+static int  g_scroll   = 0;
+static int  g_selected = -1;
+static bool g_caretOn  = true;
+static bool g_tracking = false;
+static int  g_focus    = FOCUS_TASK;
+static int  g_viewH    = WIN_H;
+
+static bool g_habAdding = false;
+static wchar_t g_hInput[HAB_NAME_MAX] = L"";
+static int  g_hInputLen = 0;
+
+static int  g_streak  = 0;
+static int  g_statDay = 0;
+
+static struct {
+    HFONT disp36, disp20, disp16;
+    HFONT seg8, seg9, seg10, seg11, seg11i, seg11s, btn;
+} gF = {0};
+
+struct Habit {
+    int id;
+    wchar_t name[HAB_NAME_MAX];
+    bool done[7];
+};
+struct HabitFileHeader { int version; int weekKey; int count; };
+
+static Habit habits[MAX_HABITS];
+static int habitCount = 0;
+static int g_habitWeekKey = 0;
+static const wchar_t *HABITS_FILE = L"habits.dat";
+
+static int daysFromCivil(int y, int m, int d) {
+    y -= m <= 2;
+    int era = (y >= 0 ? y : y - 399) / 400;
+    int yoe = y - era * 400;
+    int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+static int todayDayNumber() {
+    time_t t = time(NULL);
+    struct tm *ti = localtime(&t);
+    return daysFromCivil(ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday);
+}
+static int todayWeekIdx() {
+    time_t t = time(NULL);
+    struct tm *ti = localtime(&t);
+    return (ti->tm_wday + 6) % 7;
+}
+static int currentWeekKey() { return todayDayNumber() - todayWeekIdx(); }
+
+static int parseDayNumber(const wchar_t *s) {
+    int d = 0, m = 0, y = 0;
+    if (swscanf(s, L"%d.%d.%d", &d, &m, &y) != 3) return -1;
+    if (m < 1 || m > 12 || d < 1 || d > 31) return -1;
+    return daysFromCivil(y, m, d);
+}
+
+static void getTodayStats(int *done, int *total) {
+    wchar_t today[11];
+    getCurrentDate(today);
+    *done = 0; *total = 0;
+    for (int i = 0; i < count; i++) {
+        if (wcscmp(diary[i].date, today) == 0) {
+            (*total)++;
+            if (diary[i].done) (*done)++;
+        }
+    }
+}
+
+static bool dayComplete(const int *dn, int day) {
+    int total = 0, done = 0;
+    for (int i = 0; i < count; i++)
+        if (dn[i] == day) { total++; if (diary[i].done) done++; }
+    if (total == 0) return false;
+    return STREAK_REQUIRE_ALL ? (done == total) : (done > 0);
+}
+
+static int computeStreak() {
+    int dn[MAX_ZAPISEY];
+    for (int i = 0; i < count; i++) dn[i] = parseDayNumber(diary[i].date);
+    int d = todayDayNumber();
+    if (!dayComplete(dn, d)) d--;
+    int s = 0;
+    while (s <= count && dayComplete(dn, d)) { s++; d--; }
+    return s;
+}
+static void updateStreak() { g_streak = computeStreak(); g_statDay = todayDayNumber(); }
+
+static const wchar_t *dayWord(int n) {
+    int m100 = n % 100, m10 = n % 10;
+    if (m100 >= 11 && m100 <= 14) return L"дней";
+    if (m10 == 1) return L"день";
+    if (m10 >= 2 && m10 <= 4) return L"дня";
+    return L"дней";
+}
+
+static void saveHabits() {
+    FILE *f = _wfopen(HABITS_FILE, L"wb");
+    if (!f) return;
+    HabitFileHeader h = { 1, g_habitWeekKey, habitCount };
+    fwrite(&h, sizeof(h), 1, f);
+    fwrite(habits, sizeof(Habit), habitCount, f);
+    fclose(f);
+}
+
+static void rolloverHabits() {
+    int wk = currentWeekKey();
+    if (wk == g_habitWeekKey) return;
+    for (int i = 0; i < habitCount; i++)
+        for (int k = 0; k < 7; k++) habits[i].done[k] = false;
+    g_habitWeekKey = wk;
+    saveHabits();
+}
+
+static void loadHabits() {
+    habitCount = 0;
+    g_habitWeekKey = currentWeekKey();
+    FILE *f = _wfopen(HABITS_FILE, L"rb");
+    if (!f) return;
+    HabitFileHeader h;
+    if (fread(&h, sizeof(h), 1, f) == 1 && h.version == 1 && h.count >= 0) {
+        if (h.count > MAX_HABITS) h.count = MAX_HABITS;
+        habitCount = (int)fread(habits, sizeof(Habit), h.count, f);
+        g_habitWeekKey = h.weekKey;
+        for (int i = 0; i < habitCount; i++) {
+            habits[i].name[HAB_NAME_MAX - 1] = 0;
+            for (int k = 0; k < 7; k++)
+                habits[i].done[k] = (*(unsigned char*)&habits[i].done[k] != 0);
+        }
+    }
+    fclose(f);
+    rolloverHabits();
+}
+
+struct Layout {
+    int habTitle, habRows, habAdd, taskTitle, inputY, btnY, listY, contentH;
+};
+
+static Layout getLayout() {
+    Layout L;
+    int y = 16;
+    L.habTitle = y;  y += 36;
+    L.habRows  = y;  y += (habitCount > 0 ? habitCount : 1) * HAB_ROW_H;
+    y += 10;
+    L.habAdd   = y;  y += (g_habAdding ? 36 : 32);
+    y += 28;
+    L.taskTitle = y; y += 36;
+    L.inputY   = y;  y += UI_INPUT_H + 12;
+    L.btnY     = y;  y += UI_BTN_H + 20;
+    L.listY    = y;
+    int listH  = count > 0 ? count * UI_ROW - UI_CARD_GAP : 250;
+    L.contentH = y + listH + 24;
+    return L;
+}
+
+static int viewBodyH() { return g_viewH - UI_BODY_TOP; }
+static int sy(int contentY) { return UI_BODY_TOP + contentY - g_scroll; }
+
+static int maxScroll() {
+    int m = getLayout().contentH - viewBodyH();
+    return m > 0 ? m : 0;
+}
+static void clampScroll() {
+    int m = maxScroll();
+    if (g_scroll > m) g_scroll = m;
+    if (g_scroll < 0) g_scroll = 0;
+}
+static void ensureVisible(int contentY, int h) {
+    int vh = viewBodyH();
+    if (contentY + h > g_scroll + vh) g_scroll = contentY + h - vh;
+    if (contentY < g_scroll) g_scroll = contentY;
+    clampScroll();
+}
+
 void saveToFile() {
     FILE *f = _wfopen(FILE_NAME, L"wb");
     if (!f) return;
@@ -414,7 +638,7 @@ HRGN createRoundedRegion(int w, int h, int radius) {
 LRESULT CALLBACK PopupProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
-            g_fTitle = makeFont(L"Georgia",  24, TRUE,  FW_NORMAL);
+            g_fTitle = makeFont(g_displayFace, 26, TRUE, g_displayWeight);
             g_fText  = makeFont(L"Segoe UI", 10, FALSE, FW_NORMAL);
             g_fDate  = makeFont(L"Segoe UI",  8, FALSE, FW_NORMAL);
             return 0;
@@ -665,90 +889,490 @@ static void getHeaderDate(wchar_t *buf, int n) {
     struct tm *tmi = localtime(&t);
     swprintf(buf, n, L"%ls, %d %ls", wd[tmi->tm_wday], tmi->tm_mday, mo[tmi->tm_mon]);
 }
-static RECT rcInput() {
-    RECT r = { UI_PAD, UI_INPUT_Y, WIN_W - UI_PAD, UI_INPUT_Y + UI_INPUT_H };
-    return r;
+// ===== Мелкие рисовалки =====
+static void gCheck(Gdiplus::Graphics &g, float cx, float cy, float s) {
+    Gdiplus::Pen chk(Gdiplus::Color(255, 255, 255, 255), 2.0f * s);
+    chk.SetStartCap(Gdiplus::LineCapRound);
+    chk.SetEndCap(Gdiplus::LineCapRound);
+    chk.SetLineJoin(Gdiplus::LineJoinRound);
+    Gdiplus::PointF pts[3] = {
+        Gdiplus::PointF(cx - 4.5f * s, cy + 0.5f * s),
+        Gdiplus::PointF(cx - 1.0f * s, cy + 4.0f * s),
+        Gdiplus::PointF(cx + 4.5f * s, cy - 3.5f * s) };
+    g.DrawLines(&chk, pts, 3);
 }
-static RECT rcBtn(int i) {
-    static const int w[3] = { 130, 110, 120 };
-    int x = UI_PAD;
-    for (int k = 0; k < i; k++) x += w[k] + UI_BTN_GAP;
-    RECT r = { x, UI_BTN_Y, x + w[i], UI_BTN_Y + UI_BTN_H };
-    return r;
+
+static void gCross(Gdiplus::Graphics &g, float cx, float cy, float half, COLORREF c) {
+    Gdiplus::Pen p(gc(c), 1.6f);
+    p.SetStartCap(Gdiplus::LineCapRound);
+    p.SetEndCap(Gdiplus::LineCapRound);
+    g.DrawLine(&p, cx - half, cy - half, cx + half, cy + half);
+    g.DrawLine(&p, cx - half, cy + half, cx + half, cy - half);
 }
-static float prioCx(int k) {
-    return (float)(WIN_W - UI_PAD - 20 - (2 - k) * 22);
+
+static void gFlame(Gdiplus::Graphics &g, float fx, float fy) {
+    using namespace Gdiplus;
+    GraphicsPath p;
+    p.AddBezier(fx + 7.0f, fy + 18.0f, fx - 1.0f, fy + 14.0f, fx + 1.0f, fy + 6.0f, fx + 7.0f, fy);
+    p.AddBezier(fx + 7.0f, fy, fx + 8.0f, fy + 5.0f, fx + 14.0f, fy + 8.0f, fx + 14.0f, fy + 12.0f);
+    p.AddBezier(fx + 14.0f, fy + 12.0f, fx + 14.0f, fy + 16.0f, fx + 11.0f, fy + 18.0f, fx + 7.0f, fy + 18.0f);
+    p.CloseFigure();
+    LinearGradientBrush br(PointF(fx, fy), PointF(fx, fy + 18.0f), gc(CLR_ACCENT2), gc(CLR_ACCENT));
+    g.FillPath(&br, &p);
+    SolidBrush hi(gc(CLR_TEXT, 170));
+    g.FillEllipse(&hi, fx + 5.0f, fy + 11.0f, 4.0f, 5.5f);
 }
+
+static void gHLine(Gdiplus::Graphics &g, float x, float y, float w, COLORREF c) {
+    Gdiplus::SolidBrush b(gc(c));
+    g.FillRectangle(&b, x, y, w, 1.0f);
+}
+
+// ===== Хит-тест помощники =====
 static bool ptIn(const RECT &r, int x, int y) {
     return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
 }
+static bool inCircle(int x, int y, float cx, float cy, float r) {
+    float dx = x - cx, dy = y - cy;
+    return dx * dx + dy * dy <= r * r;
+}
+
+static RECT rcInput(const Layout &L) {
+    int y = sy(L.inputY);
+    RECT r = { UI_PAD, y, WIN_W - UI_PAD, y + UI_INPUT_H };
+    return r;
+}
+static RECT rcBtn(const Layout &L, int i) {
+    static const int w[3] = { 130, 110, 120 };
+    int x = UI_PAD;
+    for (int k = 0; k < i; k++) x += w[k] + UI_BTN_GAP;
+    int y = sy(L.btnY);
+    RECT r = { x, y, x + w[i], y + UI_BTN_H };
+    return r;
+}
+static RECT rcHabAdd(const Layout &L)   { int y = sy(L.habAdd); RECT r = { UI_PAD, y, UI_PAD + 180, y + 32 }; return r; }
+static RECT rcHabInput(const Layout &L) { int y = sy(L.habAdd); RECT r = { UI_PAD, y, 422, y + 36 }; return r; }
+static RECT rcHabOk(const Layout &L)    { int y = sy(L.habAdd); RECT r = { 432, y, WIN_W - UI_PAD, y + 36 }; return r; }
+
+static float prioCx(int k) { return (float)(WIN_W - UI_PAD - 20 - (2 - k) * 22); }
+static float habCx(int k)  { return 488.0f - (6 - k) * 28.0f; }
+#define HAB_DEL_CX 520.0f
+
 static Hit hitTest(int x, int y) {
-    Hit h = { H_NONE, -1 };
+    Hit h = { H_NONE, -1, -1 };
+    if (y < UI_BODY_TOP) return h;
+    Layout L = getLayout();
+
+    for (int i = 0; i < habitCount; i++) {
+        int top = sy(L.habRows + i * HAB_ROW_H);
+        if (y < top || y >= top + HAB_ROW_H || x < UI_PAD || x >= WIN_W - UI_PAD) continue;
+        float cy = top + HAB_ROW_H / 2.0f;
+        h.idx = i;
+        if (inCircle(x, y, HAB_DEL_CX, cy, 10.0f)) { h.kind = H_HAB_DEL; return h; }
+        for (int k = 0; k < 7; k++)
+            if (inCircle(x, y, habCx(k), cy, 12.0f)) { h.kind = H_HAB_CHECK; h.idx2 = k; return h; }
+        h.kind = H_HAB_ROW;
+        return h;
+    }
+    if (g_habAdding) {
+        RECT ri = rcHabInput(L), ro = rcHabOk(L);
+        if (ptIn(ri, x, y)) { h.kind = H_HAB_INPUT; return h; }
+        if (ptIn(ro, x, y)) { h.kind = H_HAB_OK;    return h; }
+    } else {
+        RECT ra = rcHabAdd(L);
+        if (ptIn(ra, x, y)) { h.kind = H_HAB_ADDBTN; return h; }
+    }
+
     for (int b = 0; b < 3; b++) {
-        RECT r = rcBtn(b);
+        RECT r = rcBtn(L, b);
         if (ptIn(r, x, y)) { h.kind = H_ADD + b; return h; }
     }
-    RECT ri = rcInput();
+
+    RECT ri = rcInput(L);
     if (ptIn(ri, x, y)) {
         float cy = ri.top + UI_INPUT_H / 2.0f;
-        for (int k = 0; k < 3; k++) {
-            float dx = x - prioCx(k), dy = y - cy;
-            if (dx * dx + dy * dy <= 11.0f * 11.0f) { h.kind = H_PRIO; h.idx = k + 1; return h; }
-        }
+        for (int k = 0; k < 3; k++)
+            if (inCircle(x, y, prioCx(k), cy, 11.0f)) { h.kind = H_PRIO; h.idx = k + 1; return h; }
         h.kind = H_INPUT;
         return h;
     }
-    if (y >= UI_LIST_TOP && y < UI_LIST_BOTTOM && x >= UI_PAD && x < WIN_W - UI_PAD) {
-        int rel = y - UI_LIST_TOP + g_scroll;
+
+    int rel = (y - UI_BODY_TOP + g_scroll) - L.listY;
+    if (rel >= 0 && x >= UI_PAD && x < WIN_W - UI_PAD) {
         int r = rel / UI_ROW, within = rel % UI_ROW;
         if (within < UI_CARD_H && r < count) {
             int idx = count - 1 - r;
-            float cx = UI_PAD + 26.0f;
-            float cy = (float)(UI_LIST_TOP + r * UI_ROW - g_scroll + UI_CARD_H / 2);
-            float dx = x - cx, dy = y - cy;
+            float ccy = (float)(sy(L.listY + r * UI_ROW) + UI_CARD_H / 2);
             h.idx = idx;
-            h.kind = (dx * dx + dy * dy <= 14.0f * 14.0f) ? H_CHECK : H_CARD;
+            h.kind = inCircle(x, y, UI_PAD + 26.0f, ccy, 14.0f) ? H_CHECK : H_CARD;
         }
     }
     return h;
 }
+
 static void updateHover(HWND hWnd, int x, int y) {
     Hit h = hitTest(x, y);
-    if (h.kind != g_hover.kind || h.idx != g_hover.idx) {
+    if (h.kind != g_hover.kind || h.idx != g_hover.idx || h.idx2 != g_hover.idx2) {
         g_hover = h;
         InvalidateRect(hWnd, NULL, FALSE);
     }
 }
-static void invalidateInput(HWND hWnd) {
-    RECT ri = rcInput();
-    InvalidateRect(hWnd, &ri, FALSE);
+
+static bool isHabHover(int i) {
+    return g_hover.idx == i && (g_hover.kind == H_HAB_ROW ||
+           g_hover.kind == H_HAB_CHECK || g_hover.kind == H_HAB_DEL);
 }
 
-// ===== Отрисовка секций =====
-static void paintHeader(HDC dc, Gdiplus::Graphics &g) {
-    for (int k = 0; k < 3; k++)
-        gDot(g, (float)(WIN_W - UI_PAD - 4 - (2 - k) * 16), 58.0f, 4, CLR_PRIO[k]);
+struct TextBuf { wchar_t *s; int *len; int cap; };
+static TextBuf activeBuf() {
+    TextBuf b;
+    if (g_focus == FOCUS_HABIT && g_habAdding) { b.s = g_hInput; b.len = &g_hInputLen; b.cap = HAB_NAME_MAX; }
+    else                                       { b.s = g_input;  b.len = &g_inputLen;  b.cap = MAX_DLINA; }
+    return b;
+}
+
+static void bufBackspace(wchar_t *s, int *len) {
+    if (*len <= 0) return;
+    (*len)--;
+    if (*len > 0 && s[*len] >= 0xDC00 && s[*len] <= 0xDFFF &&
+        s[*len - 1] >= 0xD800 && s[*len - 1] <= 0xDBFF)
+        (*len)--;
+    s[*len] = 0;
+}
+
+static void pasteClipboard(HWND hWnd, wchar_t *s, int *len, int cap) {
+    if (!OpenClipboard(hWnd)) return;
+    HANDLE h = GetClipboardData(CF_UNICODETEXT);
+    if (h) {
+        const wchar_t *p = (const wchar_t*)GlobalLock(h);
+        if (p) {
+            for (; *p && *len < cap - 1; p++)
+                if (*p >= 32) s[(*len)++] = *p;
+            s[*len] = 0;
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+}
+
+static void invalidateActiveInput(HWND hWnd) {
+    Layout L = getLayout();
+    RECT r = (g_focus == FOCUS_HABIT && g_habAdding) ? rcHabInput(L) : rcInput(L);
+    InvalidateRect(hWnd, &r, FALSE);
+}
+
+// ===== Действия =====
+static void toggleDone(int idx) {
+    diary[idx].done = !diary[idx].done;
+    saveToFile();
+    updateStreak();
+}
+
+static void cancelHabitAdd() {
+    g_habAdding = false;
+    g_hInputLen = 0; g_hInput[0] = 0;
+    g_focus = FOCUS_TASK;
+    clampScroll();
+}
+
+static void commitHabit(HWND hWnd) {
+    if (g_hInputLen == 0) { cancelHabitAdd(); InvalidateRect(hWnd, NULL, FALSE); return; }
+    if (habitCount >= MAX_HABITS) {
+        MessageBox(hWnd, L"Достигнут лимит привычек (50).", L"Внимание", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    Habit *h = &habits[habitCount];
+    memset(h, 0, sizeof(Habit));
+    h->id = (habitCount == 0) ? 1 : habits[habitCount - 1].id + 1;
+    wcscpy(h->name, g_hInput);
+    habitCount++;
+    saveHabits();
+    cancelHabitAdd();
+    InvalidateRect(hWnd, NULL, FALSE);
+}
+
+static void deleteHabit(HWND hWnd, int idx) {
+    if (idx < 0 || idx >= habitCount) return;
+    if (MessageBox(hWnd, L"Удалить привычку?", L"Подтверждение",
+                   MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+    for (int i = idx; i < habitCount - 1; i++) habits[i] = habits[i + 1];
+    habitCount--;
+    saveHabits();
+    clampScroll();
+    InvalidateRect(hWnd, NULL, FALSE);
+}
+// ===== Кнопки =====
+static void paintAccentButton(HDC dc, Gdiplus::Graphics &g, const RECT &r,
+                              const wchar_t *label, bool hov, bool plus) {
+    int w = r.right - r.left, h = r.bottom - r.top;
+    gFillRound(g, (float)r.left, (float)r.top, (float)w, (float)h, 12,
+               hov ? mixColor(CLR_ACCENT, RGB(255, 255, 255), 14) : CLR_ACCENT);
+
+    SelectObject(dc, gF.btn);
+    SIZE sz;
+    GetTextExtentPoint32W(dc, label, (int)wcslen(label), &sz);
+    int group = plus ? 12 + 8 + sz.cx : sz.cx;
+    int gx = r.left + (w - group) / 2;
+
+    if (plus) {
+        float cx = gx + 6.0f, cy = r.top + h / 2.0f;
+        Gdiplus::Pen pen(gc(CLR_BG), 2.0f);
+        pen.SetStartCap(Gdiplus::LineCapRound);
+        pen.SetEndCap(Gdiplus::LineCapRound);
+        g.DrawLine(&pen, cx - 5.0f, cy, cx + 5.0f, cy);
+        g.DrawLine(&pen, cx, cy - 5.0f, cx, cy + 5.0f);
+    }
     g.Flush(Gdiplus::FlushIntentionSync);
+
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, CLR_BG);
+    RECT tr = r;
+    if (plus) tr.left = gx + 20;
+    DrawTextW(dc, label, -1, &tr, (plus ? DT_LEFT : DT_CENTER) | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void paintSurfaceButton(HDC dc, Gdiplus::Graphics &g, const RECT &r,
+                               const wchar_t *label, bool hov, COLORREF fg) {
+    gFillRound(g, (float)r.left, (float)r.top, (float)(r.right - r.left),
+               (float)(r.bottom - r.top), 12, hov ? CLR_SURFACE_HOV : CLR_SURFACE);
+    g.Flush(Gdiplus::FlushIntentionSync);
+    SetBkMode(dc, TRANSPARENT);
+    SelectObject(dc, gF.btn);
+    SetTextColor(dc, fg);
+    RECT tr = r;
+    DrawTextW(dc, label, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+// ===== Текст в поле ввода =====
+static void drawInputText(HDC dc, const RECT &ri, int textL, int avail,
+                          const wchar_t *s, int len, const wchar_t *placeholder,
+                          bool showCaret) {
+    SetBkMode(dc, TRANSPARENT);
+    RECT rt = { textL, ri.top, textL + avail, ri.bottom };
+    int caretX = textL;
+    if (len == 0) {
+        SelectObject(dc, gF.seg11i);
+        SetTextColor(dc, CLR_MUTED);
+        DrawTextW(dc, placeholder, -1, &rt, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    } else {
+        SelectObject(dc, gF.seg11);
+        SetTextColor(dc, CLR_TEXT);
+        SIZE sz;
+        GetTextExtentPoint32W(dc, s, len, &sz);
+        bool of = sz.cx > avail;
+        DrawTextW(dc, s, len, &rt, (of ? DT_RIGHT : DT_LEFT) | DT_VCENTER | DT_SINGLELINE);
+        caretX = textL + (of ? avail : sz.cx) + 1;
+    }
+    if (showCaret) {
+        int mid = (ri.top + ri.bottom) / 2;
+        fillRectColor(dc, caretX, mid - 10, caretX + 2, mid + 10, CLR_TEXT);
+    }
+}
+
+// ===== Шапка (закреплена) =====
+static void paintRing(HDC dc, Gdiplus::Graphics &g) {
+    int done, total;
+    getTodayStats(&done, &total);
+    int pct = total > 0 ? (done * 100 + total / 2) / total : 0;
+
+    float cx = (float)(WIN_W - UI_PAD - UI_RING_D / 2), cy = (float)UI_RING_CY;
+    float rad = UI_RING_D / 2.0f - 3.0f;
+
+    Gdiplus::Pen track(gc(CLR_DIVIDER), 6.0f);
+    g.DrawEllipse(&track, cx - rad, cy - rad, rad * 2, rad * 2);
+
+    if (pct > 0) {
+        Gdiplus::LinearGradientBrush br(Gdiplus::PointF(cx, cy - rad - 3),
+            Gdiplus::PointF(cx, cy + rad + 3), gc(CLR_ACCENT3), gc(CLR_ACCENT2));
+        Gdiplus::Pen pen(&br, 6.0f);
+        if (pct >= 100) {
+            g.DrawEllipse(&pen, cx - rad, cy - rad, rad * 2, rad * 2);
+        } else {
+            pen.SetStartCap(Gdiplus::LineCapRound);
+            pen.SetEndCap(Gdiplus::LineCapRound);
+            g.DrawArc(&pen, cx - rad, cy - rad, rad * 2, rad * 2, -90.0f, 360.0f * pct / 100.0f);
+        }
+    }
+    g.Flush(Gdiplus::FlushIntentionSync);
+
+    wchar_t buf[8];
+    swprintf(buf, 8, L"%d%%", pct);
+    SetBkMode(dc, TRANSPARENT);
+    SelectObject(dc, gF.disp20);
+    SetTextColor(dc, CLR_TEXT);
+    RECT r1 = { (int)cx - 38, (int)cy - 27, (int)cx + 38, (int)cy + 5 };
+    DrawTextW(dc, buf, -1, &r1, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, gF.seg8);
+    SetTextColor(dc, CLR_MUTED);
+    RECT r2 = { (int)cx - 38, (int)cy + 7, (int)cx + 38, (int)cy + 23 };
+    DrawTextW(dc, L"выполнено", -1, &r2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void paintStreak(HDC dc, Gdiplus::Graphics &g) {
+    if (g_streak <= 0) return;
+
+    wchar_t txt[32];
+    swprintf(txt, 32, L"%d %ls", g_streak, dayWord(g_streak));
+    SelectObject(dc, gF.seg10);
+    SIZE sz;
+    GetTextExtentPoint32W(dc, txt, (int)wcslen(txt), &sz);
+
+    int w = 42 + sz.cx, h = UI_STREAK_H;
+    int x = WIN_W - UI_PAD - w, y = UI_STREAK_Y;
+
+    gFillRound(g, (float)x, (float)y, (float)w, (float)h, 12, CLR_SURFACE);
+    if (g_streak >= 3) {
+        static const BYTE alpha[3] = { 110, 55, 28 };
+        for (int i = 0; i < 3; i++) {
+            Gdiplus::GraphicsPath p;
+            roundRectPath(p, (float)(x - i), (float)(y - i), (float)(w + 2 * i), (float)(h + 2 * i), (float)(12 + i));
+            Gdiplus::Pen glow(gc(CLR_ACCENT2, alpha[i]), 1.5f);
+            g.DrawPath(&glow, &p);
+        }
+    }
+    gFlame(g, x + 10.0f, y + 4.0f);
+    g.Flush(Gdiplus::FlushIntentionSync);
+
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, CLR_TEXT);
+    RECT tr = { x + 30, y, x + w, y + h };
+    DrawTextW(dc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void paintWeekStrip(HDC dc, Gdiplus::Graphics &g) {
+    static const wchar_t *wk[7] = { L"Пн", L"Вт", L"Ср", L"Чт", L"Пт", L"Сб", L"Вс" };
+    int today = todayWeekIdx();
+    int cellW = (WIN_W - UI_PAD * 2) / 7;
+    for (int i = 0; i < 7; i++)
+        if (i == today)
+            gFillRound(g, (float)(UI_PAD + i * cellW + 4), (float)UI_STRIP_Y,
+                       (float)(cellW - 8), (float)UI_STRIP_H, 12, CLR_SURFACE);
+    g.Flush(Gdiplus::FlushIntentionSync);
+
+    SetBkMode(dc, TRANSPARENT);
+    SelectObject(dc, gF.seg9);
+    for (int i = 0; i < 7; i++) {
+        SetTextColor(dc, i == today ? CLR_TEXT : CLR_MUTED);
+        RECT r = { UI_PAD + i * cellW, UI_STRIP_Y, UI_PAD + (i + 1) * cellW, UI_STRIP_Y + UI_STRIP_H };
+        DrawTextW(dc, wk[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
+static void paintHeader(HDC dc, Gdiplus::Graphics &g) {
+    fillRectColor(dc, 0, 0, WIN_W, UI_HEADER_H, CLR_BG);
+
+    paintRing(dc, g);
+    paintStreak(dc, g);
+    paintWeekStrip(dc, g);
+
     wchar_t d[64];
     getHeaderDate(d, 64);
     SetBkMode(dc, TRANSPARENT);
     SelectObject(dc, gF.seg10);
     SetTextColor(dc, CLR_MUTED);
-    RECT r1 = { UI_PAD, 14, 400, 34 };
+    RECT r1 = { UI_PAD, 12, 420, 32 };
     DrawTextW(dc, d, -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    SelectObject(dc, gF.title);
+
+    SelectObject(dc, gF.disp36);
     SetTextColor(dc, CLR_TEXT);
-    RECT r2 = { UI_PAD, 32, 400, 86 };
+    RECT r2 = { UI_PAD, 32, 430, 106 };
     DrawTextW(dc, L"planner", -1, &r2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    fillRectColor(dc, 0, UI_HEADER_H, WIN_W, UI_HEADER_H + 1, CLR_DIVIDER);
+
+    fillRectColor(dc, 0, UI_HEADER_H - 1, WIN_W, UI_HEADER_H, CLR_DIVIDER);
 }
-static void paintInput(HDC dc, Gdiplus::Graphics &g) {
-    RECT ri = rcInput();
-    float w = (float)(ri.right - ri.left), h = (float)(ri.bottom - ri.top);
+// ===== Трекер привычек =====
+static void paintHabits(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    int today = todayWeekIdx();
+    float rowW = (float)(WIN_W - UI_PAD * 2);
+
+    for (int i = 0; i < habitCount; i++) {
+        int top = sy(L.habRows + i * HAB_ROW_H);
+        if (top + HAB_ROW_H < UI_BODY_TOP || top > g_viewH) continue;
+        float cy = top + HAB_ROW_H / 2.0f;
+        bool rowHov = isHabHover(i);
+
+        if (rowHov) gFillRound(g, (float)UI_PAD, (float)top + 2, rowW, HAB_ROW_H - 4.0f, 12, CLR_SURFACE);
+        else if (i < habitCount - 1) gHLine(g, UI_PAD + 16.0f, (float)top + HAB_ROW_H - 1, rowW - 32.0f, CLR_DIVIDER);
+
+        for (int k = 0; k < 7; k++) {
+            float cx = habCx(k);
+            bool hk = (g_hover.kind == H_HAB_CHECK && g_hover.idx == i && g_hover.idx2 == k);
+            if (habits[i].done[k]) {
+                gDot(g, cx, cy, 8, hk ? mixColor(CLR_ACCENT3, RGB(255, 255, 255), 15) : CLR_ACCENT3);
+                gCheck(g, cx, cy, 0.8f);
+            } else {
+                Gdiplus::Pen ring(gc(hk ? CLR_ACCENT3 : CLR_MUTED), 1.5f);
+                g.DrawEllipse(&ring, cx - 7.25f, cy - 7.25f, 14.5f, 14.5f);
+            }
+        }
+        bool hd = (g_hover.kind == H_HAB_DEL && g_hover.idx == i);
+        gCross(g, HAB_DEL_CX, cy, 4.0f, hd ? CLR_ACCENT : CLR_MUTED);
+    }
+    g.Flush(Gdiplus::FlushIntentionSync);
+
+    SetBkMode(dc, TRANSPARENT);
+    int ty = sy(L.habTitle);
+    SelectObject(dc, gF.disp16);
+    SetTextColor(dc, CLR_TEXT);
+    RECT rt = { UI_PAD, ty, 300, ty + 36 };
+    DrawTextW(dc, L"привычки", -1, &rt, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    static const wchar_t *wk[7] = { L"Пн", L"Вт", L"Ср", L"Чт", L"Пт", L"Сб", L"Вс" };
+    SelectObject(dc, gF.seg8);
+    for (int k = 0; k < 7; k++) {
+        SetTextColor(dc, k == today ? CLR_TEXT : CLR_MUTED);
+        int cx = (int)habCx(k);
+        RECT rl = { cx - 14, ty, cx + 14, ty + 36 };
+        DrawTextW(dc, wk[k], -1, &rl, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    if (habitCount == 0) {
+        int top = sy(L.habRows);
+        SelectObject(dc, gF.seg11i);
+        SetTextColor(dc, CLR_MUTED);
+        RECT re = { UI_PAD + 16, top, WIN_W - UI_PAD, top + HAB_ROW_H };
+        DrawTextW(dc, L"Привычек пока нет — добавь первую", -1, &re, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+    SelectObject(dc, gF.seg11);
+    SetTextColor(dc, CLR_TEXT);
+    for (int i = 0; i < habitCount; i++) {
+        int top = sy(L.habRows + i * HAB_ROW_H);
+        if (top + HAB_ROW_H < UI_BODY_TOP || top > g_viewH) continue;
+        RECT rn = { UI_PAD + 16, top, 294, top + HAB_ROW_H };
+        DrawTextW(dc, habits[i].name, -1, &rn, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+
+    if (g_habAdding) {
+        RECT ri = rcHabInput(L), ro = rcHabOk(L);
+        gFillRound(g, (float)ri.left, (float)ri.top, (float)(ri.right - ri.left), 36.0f, 12, CLR_INPUT);
+        gStrokeRound(g, ri.left + 0.5f, ri.top + 0.5f, (float)(ri.right - ri.left) - 1, 35.0f, 12, CLR_ACCENT, 1.0f);
+        g.Flush(Gdiplus::FlushIntentionSync);
+        drawInputText(dc, ri, ri.left + 16, ri.right - ri.left - 32, g_hInput, g_hInputLen,
+                      L"Название привычки...", g_focus == FOCUS_HABIT && g_caretOn);
+        paintAccentButton(dc, g, ro, L"Готово", g_hover.kind == H_HAB_OK, false);
+    } else {
+        paintAccentButton(dc, g, rcHabAdd(L), L"Добавить привычку", g_hover.kind == H_HAB_ADDBTN, true);
+    }
+}
+
+// ===== Задачи =====
+static void paintTaskHeader(HDC dc, const Layout &L) {
+    int ty = sy(L.taskTitle);
+    SetBkMode(dc, TRANSPARENT);
+    SelectObject(dc, gF.disp16);
+    SetTextColor(dc, CLR_TEXT);
+    RECT rt = { UI_PAD, ty, 300, ty + 36 };
+    DrawTextW(dc, L"задачи", -1, &rt, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void paintInput(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    RECT ri = rcInput(L);
+    float w = (float)(ri.right - ri.left), h = (float)UI_INPUT_H;
     bool hov = (g_hover.kind == H_INPUT || g_hover.kind == H_PRIO);
+
     gFillRound(g, (float)ri.left, (float)ri.top, w, h, 12, CLR_INPUT);
-    gStrokeRound(g, ri.left + 0.5f, ri.top + 0.5f, w - 1, h - 1, 12,
-                 hov ? CLR_MUTED : CLR_DIVIDER, 1.0f);
+    gStrokeRound(g, ri.left + 0.5f, ri.top + 0.5f, w - 1, h - 1, 12, hov ? CLR_MUTED : CLR_DIVIDER, 1.0f);
+
     float cy = ri.top + h / 2;
     for (int k = 0; k < 3; k++) {
         float cx = prioCx(k);
@@ -762,112 +1386,29 @@ static void paintInput(HDC dc, Gdiplus::Graphics &g) {
         }
     }
     g.Flush(Gdiplus::FlushIntentionSync);
-    SetBkMode(dc, TRANSPARENT);
+
     int textL = ri.left + 18;
     int avail = (int)prioCx(0) - 11 - 12 - textL;
-    RECT rt = { textL, ri.top, textL + avail, ri.bottom };
-    int caretX = textL;
-    if (g_inputLen == 0) {
-        SelectObject(dc, gF.seg11i);
-        SetTextColor(dc, CLR_MUTED);
-        DrawTextW(dc, L"Что нужно сделать...", -1, &rt,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    } else {
-        SelectObject(dc, gF.seg11);
-        SetTextColor(dc, CLR_TEXT);
-        SIZE sz;
-        GetTextExtentPoint32W(dc, g_input, g_inputLen, &sz);
-        bool overflow = sz.cx > avail;
-        DrawTextW(dc, g_input, g_inputLen, &rt,
-                  (overflow ? DT_RIGHT : DT_LEFT) | DT_VCENTER | DT_SINGLELINE);
-        caretX = textL + (overflow ? avail : sz.cx) + 1;
-    }
-    if (g_caretOn) {
-        int mid = ri.top + UI_INPUT_H / 2;
-        fillRectColor(dc, caretX, mid - 11, caretX + 2, mid + 11, CLR_TEXT);
-    }
+    drawInputText(dc, ri, textL, avail, g_input, g_inputLen, L"Что нужно сделать...",
+                  g_focus == FOCUS_TASK && g_caretOn);
 }
-static void paintButtons(HDC dc, Gdiplus::Graphics &g) {
-    static const wchar_t *lbl[3] = { L"Добавить", L"Удалить", L"Свернуть" };
-    COLORREF fg[3] = { CLR_BG, g_selected >= 0 ? CLR_TEXT : CLR_MUTED, CLR_TEXT };
-    SelectObject(dc, gF.btn);
-    SIZE sz;
-    GetTextExtentPoint32W(dc, lbl[0], (int)wcslen(lbl[0]), &sz);
-    RECT ra = rcBtn(0);
-    int group = 12 + 8 + sz.cx;
-    int gx = ra.left + ((ra.right - ra.left) - group) / 2;
-    for (int b = 0; b < 3; b++) {
-        RECT r = rcBtn(b);
-        bool hov = (g_hover.kind == H_ADD + b);
-        COLORREF fill;
-        if (b == 0) fill = hov ? mixColor(CLR_ACCENT, RGB(255, 255, 255), 14) : CLR_ACCENT;
-        else        fill = hov ? CLR_SURFACE_HOV : CLR_SURFACE;
-        gFillRound(g, (float)r.left, (float)r.top,
-                   (float)(r.right - r.left), (float)(r.bottom - r.top), 12, fill);
-        if (b == 0) {
-            float cx = gx + 6.0f, cy = r.top + UI_BTN_H / 2.0f;
-            Gdiplus::Pen pen(gc(CLR_BG), 2.0f);
-            pen.SetStartCap(Gdiplus::LineCapRound);
-            pen.SetEndCap(Gdiplus::LineCapRound);
-            g.DrawLine(&pen, cx - 5.0f, cy, cx + 5.0f, cy);
-            g.DrawLine(&pen, cx, cy - 5.0f, cx, cy + 5.0f);
-        }
-    }
-    g.Flush(Gdiplus::FlushIntentionSync);
-    SetBkMode(dc, TRANSPARENT);
-    SelectObject(dc, gF.btn);
-    for (int b = 0; b < 3; b++) {
-        RECT r = rcBtn(b);
-        SetTextColor(dc, fg[b]);
-        if (b == 0) {
-            r.left = gx + 20;
-            DrawTextW(dc, lbl[b], -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        } else {
-            DrawTextW(dc, lbl[b], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        }
-    }
+
+static void paintButtons(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    paintAccentButton(dc, g, rcBtn(L, 0), L"Добавить", g_hover.kind == H_ADD, true);
+    paintSurfaceButton(dc, g, rcBtn(L, 1), L"Удалить", g_hover.kind == H_DEL,
+                       g_selected >= 0 ? CLR_TEXT : CLR_MUTED);
+    paintSurfaceButton(dc, g, rcBtn(L, 2), L"Свернуть", g_hover.kind == H_HIDE, CLR_TEXT);
 }
-static void paintProgress(HDC dc, Gdiplus::Graphics &g) {
-    wchar_t today[11];
-    getCurrentDate(today);
-    int total = 0, done = 0;
-    for (int i = 0; i < count; i++) {
-        if (wcscmp(diary[i].date, today) == 0) {
-            total++;
-            if (diary[i].done) done++;
-        }
-    }
-    float x = (float)UI_PAD, y = (float)(UI_PROG_Y + 30);
-    float w = (float)(WIN_W - UI_PAD * 2);
-    gFillRound(g, x, y, w, 4, 2, CLR_DIVIDER);
-    float fw = total > 0 ? w * done / total : 0.0f;
-    if (fw >= 4.0f) {
-        Gdiplus::LinearGradientBrush br(Gdiplus::PointF(x, 0), Gdiplus::PointF(x + w, 0),
-                                        gc(CLR_ACCENT3), gc(CLR_ACCENT2));
-        Gdiplus::GraphicsPath p;
-        roundRectPath(p, x, y, fw, 4, 2);
-        g.FillPath(&br, &p);
-    }
-    g.Flush(Gdiplus::FlushIntentionSync);
-    SetBkMode(dc, TRANSPARENT);
-    SelectObject(dc, gF.seg11);
-    SetTextColor(dc, CLR_TEXT);
-    RECT r1 = { UI_PAD, UI_PROG_Y, 300, UI_PROG_Y + 24 };
-    DrawTextW(dc, L"Сегодня", -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    wchar_t buf[32];
-    swprintf(buf, 32, L"%d из %d", done, total);
-    SelectObject(dc, gF.seg10);
-    SetTextColor(dc, CLR_MUTED);
-    RECT r2 = { 260, UI_PROG_Y, WIN_W - UI_PAD, UI_PROG_Y + 24 };
-    DrawTextW(dc, buf, -1, &r2, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-}
-static void paintEmpty(HDC dc, Gdiplus::Graphics &g) {
+
+static void paintEmpty(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
     using namespace Gdiplus;
-    float ox = WIN_W / 2.0f, oy = 410.0f;
+    float ox = WIN_W / 2.0f, oy = (float)(sy(L.listY) + 60);
+
     Pen pen(gc(CLR_MUTED, 210), 2.0f);
     pen.SetStartCap(LineCapRound);
     pen.SetEndCap(LineCapRound);
     pen.SetLineJoin(LineJoinRound);
+
     GraphicsPath cup;
     cup.AddLine(ox - 34.0f, oy, ox + 34.0f, oy);
     cup.AddLine(ox + 34.0f, oy, ox + 34.0f, oy + 36.0f);
@@ -878,6 +1419,7 @@ static void paintEmpty(HDC dc, Gdiplus::Graphics &g) {
     g.DrawPath(&pen, &cup);
     g.DrawArc(&pen, ox + 22.0f, oy + 10.0f, 28.0f, 26.0f, -90.0f, 180.0f);
     g.DrawLine(&pen, ox - 52.0f, oy + 66.0f, ox + 52.0f, oy + 66.0f);
+
     static const float sx[3] = { -14.0f, 0.0f, 14.0f };
     static const float sh[3] = { 26.0f, 36.0f, 26.0f };
     for (int i = 0; i < 3; i++) {
@@ -886,106 +1428,104 @@ static void paintEmpty(HDC dc, Gdiplus::Graphics &g) {
                      x - 8.0f, oy - 8.0f - sh[i] * 0.7f, x, oy - 8.0f - sh[i]);
     }
     g.Flush(FlushIntentionSync);
+
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, CLR_MUTED);
-    SelectObject(dc, gF.geo16);
+    SelectObject(dc, gF.disp16);
     RECT r1 = { 0, (int)oy + 90, WIN_W, (int)oy + 122 };
-    DrawTextW(dc, L"Тут пока пусто", -1, &r1, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DrawTextW(dc, L"тут пока пусто", -1, &r1, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(dc, gF.seg10);
     RECT r2 = { 0, (int)oy + 124, WIN_W, (int)oy + 146 };
     DrawTextW(dc, L"Добавь первую запись", -1, &r2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
-static void paintList(HDC dc, Gdiplus::Graphics &g) {
-    if (count == 0) { paintEmpty(dc, g); return; }
-    clampScroll();
-    g.SetClip(Gdiplus::Rect(0, UI_LIST_TOP, WIN_W, UI_LIST_H));
-    int first = g_scroll / UI_ROW;
-    int last = (g_scroll + UI_LIST_H) / UI_ROW;
+
+static void paintList(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    if (count == 0) { paintEmpty(dc, g, L); return; }
+
+    int topCy = g_scroll - L.listY;
+    int botCy = g_scroll + viewBodyH() - L.listY;
+    int first = topCy > 0 ? topCy / UI_ROW : 0;
+    int last  = botCy >= 0 ? botCy / UI_ROW : -1;
     if (last > count - 1) last = count - 1;
     float cw = (float)(WIN_W - UI_PAD * 2);
+
     for (int r = first; r <= last; r++) {
         int idx = count - 1 - r;
-        float y = (float)(UI_LIST_TOP + r * UI_ROW - g_scroll);
-        bool sel = (g_selected == idx);
-        bool hov = (g_hover.idx == idx &&
-                    (g_hover.kind == H_CARD || g_hover.kind == H_CHECK));
+        float y = (float)sy(L.listY + r * UI_ROW);
+        bool sel  = (g_selected == idx);
+        bool hov  = (g_hover.idx == idx && (g_hover.kind == H_CARD || g_hover.kind == H_CHECK));
         bool hchk = (g_hover.kind == H_CHECK && g_hover.idx == idx);
-        gFillRound(g, (float)UI_PAD, y, cw, (float)UI_CARD_H, 12,
-                   hov ? CLR_SURFACE_HOV : CLR_SURFACE);
-        if (sel)
-            gStrokeRound(g, UI_PAD + 0.5f, y + 0.5f, cw - 1, UI_CARD_H - 1.0f, 12,
-                         CLR_MUTED, 1.0f);
+
+        gFillRound(g, (float)UI_PAD, y, cw, (float)UI_CARD_H, 12, hov ? CLR_SURFACE_HOV : CLR_SURFACE);
+        if (sel) gStrokeRound(g, UI_PAD + 0.5f, y + 0.5f, cw - 1, UI_CARD_H - 1.0f, 12, CLR_MUTED, 1.0f);
+
         float cx = UI_PAD + 26.0f, cy = y + UI_CARD_H / 2.0f;
         if (diary[idx].done) {
-            gDot(g, cx, cy, 10, hchk ? mixColor(CLR_ACCENT3, RGB(255, 255, 255), 15)
-                                     : CLR_ACCENT3);
-            Gdiplus::Pen chk(Gdiplus::Color(255, 255, 255, 255), 2.0f);
-            chk.SetStartCap(Gdiplus::LineCapRound);
-            chk.SetEndCap(Gdiplus::LineCapRound);
-            chk.SetLineJoin(Gdiplus::LineJoinRound);
-            Gdiplus::PointF pts[3] = {
-                Gdiplus::PointF(cx - 4.5f, cy + 0.5f),
-                Gdiplus::PointF(cx - 1.0f, cy + 4.0f),
-                Gdiplus::PointF(cx + 4.5f, cy - 3.5f) };
-            g.DrawLines(&chk, pts, 3);
+            gDot(g, cx, cy, 10, hchk ? mixColor(CLR_ACCENT3, RGB(255, 255, 255), 15) : CLR_ACCENT3);
+            gCheck(g, cx, cy, 1.0f);
         } else {
             Gdiplus::Pen ring(gc(hchk ? CLR_ACCENT3 : CLR_MUTED), 1.5f);
             g.DrawEllipse(&ring, cx - 9.25f, cy - 9.25f, 18.5f, 18.5f);
         }
         int p = diary[idx].priority;
         if (p < 1 || p > 3) p = 2;
-        gDot(g, cx + 10.0f + 14.0f, cy, 4, CLR_PRIO[p - 1]);
-    }
-    int ms = maxScroll();
-    if (ms > 0) {
-        int content = count * UI_ROW - UI_CARD_GAP;
-        float th = (float)UI_LIST_H * UI_LIST_H / content;
-        if (th < 24.0f) th = 24.0f;
-        float ty = UI_LIST_TOP + (UI_LIST_H - th) * g_scroll / ms;
-        gFillRound(g, (float)(WIN_W - 12), ty, 3.0f, th, 1.5f, CLR_DIVIDER);
+        gDot(g, cx + 24.0f, cy, 4, CLR_PRIO[p - 1]);
     }
     g.Flush(Gdiplus::FlushIntentionSync);
-    int saved = SaveDC(dc);
-    IntersectClipRect(dc, 0, UI_LIST_TOP, WIN_W, UI_LIST_BOTTOM);
+
     SetBkMode(dc, TRANSPARENT);
     for (int r = first; r <= last; r++) {
         int idx = count - 1 - r;
-        int y = UI_LIST_TOP + r * UI_ROW - g_scroll;
+        int y = sy(L.listY + r * UI_ROW);
         bool done = diary[idx].done;
+
         SelectObject(dc, gF.seg9);
         SetTextColor(dc, CLR_MUTED);
         RECT rd = { 94, y, 164, y + UI_CARD_H };
         DrawTextW(dc, diary[idx].date, -1, &rd, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
         SelectObject(dc, done ? gF.seg11s : gF.seg11);
         SetTextColor(dc, done ? CLR_MUTED : CLR_TEXT);
         RECT rt = { 172, y, WIN_W - UI_PAD - 16, y + UI_CARD_H };
-        DrawTextW(dc, diary[idx].text, -1, &rt,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DrawTextW(dc, diary[idx].text, -1, &rt, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
+}
+
+static void paintBody(HDC dc, Gdiplus::Graphics &g) {
+    Layout L = getLayout();
+    int vh = viewBodyH();
+
+    g.SetClip(Gdiplus::Rect(0, UI_BODY_TOP, WIN_W, vh));
+    int saved = SaveDC(dc);
+    IntersectClipRect(dc, 0, UI_BODY_TOP, WIN_W, g_viewH);
+
+    paintHabits(dc, g, L);
+    paintTaskHeader(dc, L);
+    paintInput(dc, g, L);
+    paintButtons(dc, g, L);
+    paintList(dc, g, L);
+
+    int ms = maxScroll();
+    if (ms > 0) {
+        float th = (float)vh * vh / L.contentH;
+        if (th < 24.0f) th = 24.0f;
+        float ty = UI_BODY_TOP + (vh - th) * g_scroll / ms;
+        gFillRound(g, (float)(WIN_W - 12), ty, 3.0f, th, 1.5f, CLR_DIVIDER);
+    }
+    g.Flush(Gdiplus::FlushIntentionSync);
+
     RestoreDC(dc, saved);
     g.ResetClip();
 }
-static void pasteClipboard(HWND hWnd) {
-    if (!OpenClipboard(hWnd)) return;
-    HANDLE h = GetClipboardData(CF_UNICODETEXT);
-    if (h) {
-        const wchar_t *s = (const wchar_t*)GlobalLock(h);
-        if (s) {
-            for (; *s && g_inputLen < MAX_DLINA - 1; s++)
-                if (*s >= 32) g_input[g_inputLen++] = *s;
-            g_input[g_inputLen] = 0;
-            GlobalUnlock(h);
-        }
-    }
-    CloseClipboard();
-}
+
+// ===== Рамка окна =====
 static void applyMainWindowChrome(HWND hWnd) {
     HMODULE hDwm = LoadLibraryW(L"dwmapi.dll");
     if (!hDwm) return;
     typedef HRESULT (WINAPI *SetAttrFn)(HWND, DWORD, LPCVOID, DWORD);
     SetAttrFn fn = (SetAttrFn)GetProcAddress(hDwm, "DwmSetWindowAttribute");
     if (fn) {
-        BOOL dark = TRUE;          fn(hWnd, 20, &dark, sizeof(dark));
+        BOOL dark = TRUE;           fn(hWnd, 20, &dark, sizeof(dark));
         COLORREF brd = CLR_DIVIDER; fn(hWnd, 34, &brd,  sizeof(brd));
         COLORREF cap = CLR_BG;      fn(hWnd, 35, &cap,  sizeof(cap));
         COLORREF txt = CLR_TEXT;    fn(hWnd, 36, &txt,  sizeof(txt));
@@ -996,39 +1536,46 @@ static void applyMainWindowChrome(HWND hWnd) {
 LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE: {
-            gF.title  = makeFont(L"Georgia",  30, TRUE,  FW_NORMAL);
-            gF.geo16  = makeFont(L"Georgia",  16, TRUE,  FW_NORMAL);
+            gF.disp36 = makeFont(g_displayFace, 36, TRUE, g_displayWeight);
+            gF.disp20 = makeFont(g_displayFace, 20, TRUE, g_displayWeight);
+            gF.disp16 = makeFont(g_displayFace, 16, TRUE, g_displayWeight);
+            gF.seg8   = makeFont(L"Segoe UI",  8, FALSE, FW_NORMAL);
             gF.seg9   = makeFont(L"Segoe UI",  9, FALSE, FW_NORMAL);
             gF.seg10  = makeFont(L"Segoe UI", 10, FALSE, FW_NORMAL);
             gF.seg11  = makeFont(L"Segoe UI", 11, FALSE, FW_NORMAL);
             gF.seg11i = makeFont(L"Segoe UI", 11, TRUE,  FW_NORMAL);
             gF.seg11s = makeFontStrike(L"Segoe UI", 11);
             gF.btn    = makeFont(L"Segoe UI", 10, FALSE, FW_SEMIBOLD);
+
             SetTimer(hWnd, ID_TIMER_CARET, 500, NULL);
+
             loadFromFile();
+            loadHabits();
             refreshList();
             return 0;
         }
+
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hWnd, &ps);
+
             HDC memDC = CreateCompatibleDC(hdc);
-            HBITMAP memBmp = CreateCompatibleBitmap(hdc, WIN_W, WIN_H);
+            HBITMAP memBmp = CreateCompatibleBitmap(hdc, WIN_W, g_viewH);
             HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, memBmp);
             HGDIOBJ oldFont = GetCurrentObject(memDC, OBJ_FONT);
-            fillRectColor(memDC, 0, 0, WIN_W, WIN_H, CLR_BG);
+
+            fillRectColor(memDC, 0, 0, WIN_W, g_viewH, CLR_BG);
             SetBkMode(memDC, TRANSPARENT);
             {
                 Gdiplus::Graphics g(memDC);
                 g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                paintBody(memDC, g);
                 paintHeader(memDC, g);
-                paintInput(memDC, g);
-                paintButtons(memDC, g);
-                paintProgress(memDC, g);
-                paintList(memDC, g);
                 g.Flush(Gdiplus::FlushIntentionSync);
             }
-            BitBlt(hdc, 0, 0, WIN_W, WIN_H, memDC, 0, 0, SRCCOPY);
+
+            BitBlt(hdc, 0, 0, WIN_W, g_viewH, memDC, 0, 0, SRCCOPY);
+
             SelectObject(memDC, oldFont);
             SelectObject(memDC, oldBmp);
             DeleteObject(memBmp);
@@ -1036,19 +1583,26 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             EndPaint(hWnd, &ps);
             return 0;
         }
-        case WM_ERASEBKGND: return 1;
+
+        case WM_ERASEBKGND:
+            return 1;
+
         case WM_SETCURSOR: {
             if (LOWORD(lParam) == HTCLIENT) {
                 POINT pt;
                 GetCursorPos(&pt);
                 ScreenToClient(hWnd, &pt);
                 Hit h = hitTest(pt.x, pt.y);
-                SetCursor(LoadCursor(NULL, h.kind == H_NONE ? IDC_ARROW
-                                          : (h.kind == H_INPUT ? IDC_IBEAM : IDC_HAND)));
+                LPCWSTR c = IDC_HAND;
+                if (h.kind == H_NONE) c = IDC_ARROW;
+                else if (h.kind == H_INPUT || h.kind == H_HAB_INPUT) c = IDC_IBEAM;
+                else if (h.kind == H_HAB_ROW) c = IDC_ARROW;
+                SetCursor(LoadCursor(NULL, c));
                 return TRUE;
             }
             break;
         }
+
         case WM_MOUSEMOVE: {
             if (!g_tracking) {
                 TRACKMOUSEEVENT t = { sizeof(t), TME_LEAVE, hWnd, 0 };
@@ -1058,31 +1612,47 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             updateHover(hWnd, (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam));
             return 0;
         }
+
         case WM_MOUSELEAVE:
             g_tracking = false;
-            g_hover.kind = H_NONE;
-            g_hover.idx = -1;
+            g_hover.kind = H_NONE; g_hover.idx = -1; g_hover.idx2 = -1;
             InvalidateRect(hWnd, NULL, FALSE);
             return 0;
+
         case WM_LBUTTONDOWN: {
             SetFocus(hWnd);
             Hit h = hitTest((int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam));
             switch (h.kind) {
-                case H_ADD:   addZapis(hWnd);    break;
+                case H_ADD:   g_focus = FOCUS_TASK; addZapis(hWnd);    break;
                 case H_DEL:   deleteZapis(hWnd); break;
                 case H_HIDE:  ShowWindow(hWnd, SW_HIDE); break;
                 case H_PRIO:  g_newPrio = h.idx; break;
-                case H_INPUT: g_caretOn = true;  break;
-                case H_CHECK:
-                    diary[h.idx].done = !diary[h.idx].done;
-                    saveToFile();
-                    break;
+                case H_INPUT: g_focus = FOCUS_TASK; g_caretOn = true; break;
+                case H_CHECK: toggleDone(h.idx); break;
                 case H_CARD:  g_selected = h.idx; break;
-                default:      g_selected = -1;    break;
+                case H_HAB_CHECK:
+                    habits[h.idx].done[h.idx2] = !habits[h.idx].done[h.idx2];
+                    saveHabits();
+                    break;
+                case H_HAB_DEL:   deleteHabit(hWnd, h.idx); break;
+                case H_HAB_ROW:   break;
+                case H_HAB_ADDBTN: {
+                    g_habAdding = true;
+                    g_focus = FOCUS_HABIT;
+                    g_hInputLen = 0; g_hInput[0] = 0;
+                    g_caretOn = true;
+                    Layout L = getLayout();
+                    ensureVisible(L.habAdd, 36 + 16);
+                    break;
+                }
+                case H_HAB_INPUT: g_focus = FOCUS_HABIT; g_caretOn = true; break;
+                case H_HAB_OK:    commitHabit(hWnd); break;
+                default:          g_selected = -1; break;
             }
             InvalidateRect(hWnd, NULL, FALSE);
             return 0;
         }
+
         case WM_MOUSEWHEEL: {
             int delta = (int)(short)HIWORD(wParam);
             g_scroll -= delta / 2;
@@ -1094,42 +1664,46 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             InvalidateRect(hWnd, NULL, FALSE);
             return 0;
         }
+
         case WM_CHAR: {
             wchar_t c = (wchar_t)wParam;
-            if (c >= 32 && c != 127 && g_inputLen < MAX_DLINA - 1) {
-                g_input[g_inputLen++] = c;
-                g_input[g_inputLen] = 0;
+            TextBuf b = activeBuf();
+            if (c >= 32 && c != 127 && *b.len < b.cap - 1) {
+                b.s[(*b.len)++] = c;
+                b.s[*b.len] = 0;
                 g_caretOn = true;
-                invalidateInput(hWnd);
+                invalidateActiveInput(hWnd);
             }
             return 0;
         }
+
         case WM_KEYDOWN: {
+            TextBuf b = activeBuf();
             if (wParam == VK_BACK) {
-                if (g_inputLen > 0) {
-                    g_inputLen--;
-                    if (g_inputLen > 0 &&
-                        g_input[g_inputLen] >= 0xDC00 && g_input[g_inputLen] <= 0xDFFF &&
-                        g_input[g_inputLen - 1] >= 0xD800 && g_input[g_inputLen - 1] <= 0xDBFF)
-                        g_inputLen--;
-                    g_input[g_inputLen] = 0;
-                }
+                bufBackspace(b.s, b.len);
                 g_caretOn = true;
-                invalidateInput(hWnd);
+                invalidateActiveInput(hWnd);
                 return 0;
             }
             if (wParam == VK_RETURN) {
-                addZapis(hWnd);
+                if (g_focus == FOCUS_HABIT && g_habAdding) commitHabit(hWnd);
+                else addZapis(hWnd);
+                return 0;
+            }
+            if (wParam == VK_ESCAPE && g_habAdding) {
+                cancelHabitAdd();
+                InvalidateRect(hWnd, NULL, FALSE);
                 return 0;
             }
             if (wParam == 'V' && (GetKeyState(VK_CONTROL) & 0x8000)) {
-                pasteClipboard(hWnd);
+                pasteClipboard(hWnd, b.s, b.len, b.cap);
                 g_caretOn = true;
-                invalidateInput(hWnd);
+                invalidateActiveInput(hWnd);
                 return 0;
             }
             break;
         }
+
         case WM_TRAYICON: {
             if (lParam == WM_LBUTTONUP) {
                 showPopupNearTray();
@@ -1137,6 +1711,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 POINT pt;
                 GetCursorPos(&pt);
                 HMENU hMenu = CreatePopupMenu();
+
                 AppendMenuW(hMenu, MF_STRING, IDM_OPEN,   L"Открыть редактор");
                 AppendMenuW(hMenu, MF_STRING, IDM_WIDGET, L"Показать виджет");
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
@@ -1145,11 +1720,13 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                     IDM_AUTOSTART, L"Запускать с Windows");
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"Выход");
+
                 SetForegroundWindow(hWnd);
                 int cmd = TrackPopupMenu(hMenu,
                     TPM_RETURNCMD | TPM_RIGHTBUTTON,
                     pt.x, pt.y, 0, hWnd, NULL);
                 DestroyMenu(hMenu);
+
                 switch (cmd) {
                     case IDM_OPEN:
                         ShowWindow(hWnd, SW_SHOW);
@@ -1168,6 +1745,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             }
             return 0;
         }
+
         case WM_HOTKEY: {
             if (wParam == ID_HOTKEY) {
                 if (IsWindowVisible(hWnd)) ShowWindow(hWnd, SW_HIDE);
@@ -1178,10 +1756,17 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             }
             return 0;
         }
+
         case WM_TIMER: {
             if (wParam == ID_TIMER_CARET) {
                 g_caretOn = !g_caretOn;
-                if (IsWindowVisible(hWnd)) invalidateInput(hWnd);
+                if (todayDayNumber() != g_statDay) {
+                    rolloverHabits();
+                    updateStreak();
+                    InvalidateRect(hWnd, NULL, FALSE);
+                } else if (IsWindowVisible(hWnd)) {
+                    invalidateActiveInput(hWnd);
+                }
                 return 0;
             }
             wchar_t today[11];
@@ -1195,22 +1780,23 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             }
             return 0;
         }
+
         case WM_CLOSE:
             ShowWindow(hWnd, SW_HIDE);
             return 0;
+
         case WM_DESTROY:
             KillTimer(hWnd, ID_TIMER_CARET);
             saveToFile();
+            saveHabits();
             Shell_NotifyIconW(NIM_DELETE, &nid);
             UnregisterHotKey(hWnd, ID_HOTKEY);
-            if (gF.title)  DeleteObject(gF.title);
-            if (gF.geo16)  DeleteObject(gF.geo16);
-            if (gF.seg9)   DeleteObject(gF.seg9);
-            if (gF.seg10)  DeleteObject(gF.seg10);
-            if (gF.seg11)  DeleteObject(gF.seg11);
-            if (gF.seg11i) DeleteObject(gF.seg11i);
-            if (gF.seg11s) DeleteObject(gF.seg11s);
-            if (gF.btn)    DeleteObject(gF.btn);
+            {
+                HFONT *fonts[] = { &gF.disp36, &gF.disp20, &gF.disp16, &gF.seg8, &gF.seg9,
+                                   &gF.seg10, &gF.seg11, &gF.seg11i, &gF.seg11s, &gF.btn };
+                for (size_t i = 0; i < sizeof(fonts) / sizeof(fonts[0]); i++)
+                    if (*fonts[i]) { DeleteObject(*fonts[i]); *fonts[i] = NULL; }
+            }
             PostQuitMessage(0);
             return 0;
     }
@@ -1219,6 +1805,16 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, PWSTR pCmdLine, int nCmdShow) {
     hInst = hInstance;
+
+    // Данные всегда рядом с .exe (важно для автозапуска)
+    {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        wchar_t *p = wcsrchr(exePath, L'\\');
+        if (p) { *p = 0; SetCurrentDirectoryW(exePath); }
+    }
+
+    loadAppFonts();
 
     Gdiplus::GdiplusStartupInput gdiplusStartupInput;
     Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
@@ -1238,18 +1834,29 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, PWSTR pCmdLine, int nC
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     RECT wr = { 0, 0, WIN_W, WIN_H };
     AdjustWindowRect(&wr, style, FALSE);
+    int frameH = (wr.bottom - wr.top) - WIN_H;
 
-    hMainWnd = CreateWindowExW(
-        0, L"DiaryMainWnd", L"Ежедневник",
-        style,
-        CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
-        NULL, NULL, hInstance, NULL);
+    RECT wa;
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    int fit = (wa.bottom - wa.top) - frameH - 24;
+    g_viewH = WIN_H;
+    if (fit < g_viewH) g_viewH = fit;
+    if (g_viewH < 560) g_viewH = 560;
+
+    wr.left = 0; wr.top = 0; wr.right = WIN_W; wr.bottom = g_viewH;
+    AdjustWindowRect(&wr, style, FALSE);
+    int ww = wr.right - wr.left, wh = wr.bottom - wr.top;
+    int wx = wa.left + ((wa.right - wa.left) - ww) / 2;
+    int wy = wa.top  + ((wa.bottom - wa.top) - wh) / 2;
+
+    hMainWnd = CreateWindowExW(0, L"DiaryMainWnd", L"Ежедневник", style,
+        wx, wy, ww, wh, NULL, NULL, hInstance, NULL);
 
     if (!hMainWnd) {
+        unloadAppFonts();
         Gdiplus::GdiplusShutdown(gdiplusToken);
         return 0;
     }
-
     applyMainWindowChrome(hMainWnd);
 
     createPopupWindow();
@@ -1278,6 +1885,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, PWSTR pCmdLine, int nC
     if (hIconColor) DestroyIcon(hIconColor);
     if (hIconGray)  DestroyIcon(hIconGray);
     Gdiplus::GdiplusShutdown(gdiplusToken);
+    unloadAppFonts();
 
     return (int)msg.wParam;
 }
