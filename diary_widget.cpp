@@ -53,6 +53,9 @@
 #define HAB_ROW_H         40
 #define MAX_HABITS        50
 #define MAX_PRACTICES     2000
+#define MAX_LANGUAGES     10
+#define LANG_NAME_MAX     32
+#define LANG_GOAL_MAX     64
 #define PRACT_NAME_MAX    32
 #define HAB_NAME_MAX      64
 #define ID_TIMER_CARET    2
@@ -349,7 +352,9 @@ void getCurrentTime(wchar_t *buffer) {
 enum { H_NONE = 0, H_ADD, H_DEL, H_HIDE, H_INPUT, H_PRIO, H_CHECK, H_CARD,
        H_HAB_CHECK, H_HAB_DEL, H_HAB_ROW, H_HAB_ADDBTN, H_HAB_INPUT, H_HAB_OK,
        H_TAB, H_TODAY_ADD_TASK, H_TODAY_ADD_PRACTICE, H_TODAY_ADD_WORD, H_CALENDAR_ICON,
-       H_PRACTICE_ADD };
+       H_PRACTICE_ADD, H_PRACTICE_PILL, H_PRACTICE_DEL,
+       H_PF_TYPE, H_PF_MIN, H_PF_OK, H_PF_CANCEL, H_PF_PILL,
+       H_LF_ROW, H_LF_OK, H_LF_CANCEL, H_LANG_ADD };
 struct Hit { int kind; int idx; int idx2; };
 enum { FOCUS_TASK = 0, FOCUS_HABIT };
 enum { TAB_TODAY = 0, TAB_HABITS, TAB_TASKS, TAB_LANGUAGE, TAB_PRACTICE, TAB_COUNT };
@@ -398,6 +403,49 @@ struct PracticeFileHeader { int version; int count; };
 
 static Practice practices[MAX_PRACTICES];
 static int practiceCount = 0;
+static int g_practiceGoal = 30;  // цель: 30 мин/день
+
+// ===== Language =====
+struct Language {
+    int id;
+    wchar_t name[LANG_NAME_MAX];   // "АНГЛИЙСКИЙ"
+    wchar_t goal[LANG_GOAL_MAX];   // "B1 → C1"
+    int progress;                   // 0..100
+    int wordsTotal;
+    int streakDays;
+};
+struct LanguageFileHeader { int version; int count; };
+
+static Language languages[MAX_LANGUAGES];
+static int languageCount = 0;
+static const wchar_t *LANGUAGES_FILE = L"languages.dat";
+
+struct LanguageTemplate {
+    const wchar_t *name;
+    const wchar_t *goal;
+    int progress;
+    int wordsTotal;
+    int streakDays;
+};
+
+static const LanguageTemplate LANG_TEMPLATES[] = {
+    { L"АНГЛИЙСКИЙ", L"B1 \u2192 C1",      43, 1240, 23 },
+    { L"АРМЯНСКИЙ",  L"алфавит + 500 слов", 12,   60,  5 },
+    { L"ГРУЗИНСКИЙ", L"разговорный A2",     35,  380,  0 },
+    { L"КИТАЙСКИЙ",  L"HSK 3 \u2192 HSK 5", 18,  210,  0 },
+};
+#define LANG_TEMPLATES_COUNT 4
+
+static bool g_langForm = false;
+static bool g_langSelected[LANG_TEMPLATES_COUNT] = { false, false, false, false };
+
+// Состояние формы добавления практики
+static bool g_practiceForm = false;
+static wchar_t g_practiceTypeInput[PRACT_NAME_MAX] = L"";
+static int g_practiceTypeLen = 0;
+static wchar_t g_practiceMinInput[8] = L"";
+static int g_practiceMinLen = 0;
+static int g_practiceField = 0;  // 0 = тип, 1 = минуты
 static const wchar_t *PRACTICES_FILE = L"practices.dat";
 
 // Типы практик по умолчанию
@@ -566,6 +614,33 @@ static int practiceStreak() {
     }
     return s;
 }
+
+// ===== Language: сохранение / загрузка =====
+static void saveLanguages() {
+    FILE *f = _wfopen(LANGUAGES_FILE, L"wb");
+    if (!f) return;
+    LanguageFileHeader h = { 1, languageCount };
+    fwrite(&h, sizeof(h), 1, f);
+    fwrite(languages, sizeof(Language), languageCount, f);
+    fclose(f);
+}
+
+static void loadLanguages() {
+    languageCount = 0;
+    FILE *f = _wfopen(LANGUAGES_FILE, L"rb");
+    if (!f) return;
+    LanguageFileHeader h;
+    if (fread(&h, sizeof(h), 1, f) == 1 && h.version == 1 && h.count >= 0) {
+        if (h.count > MAX_LANGUAGES) h.count = MAX_LANGUAGES;
+        languageCount = (int)fread(languages, sizeof(Language), h.count, f);
+        for (int i = 0; i < languageCount; i++) {
+            languages[i].name[LANG_NAME_MAX - 1] = 0;
+            languages[i].goal[LANG_GOAL_MAX - 1] = 0;
+        }
+    }
+    fclose(f);
+}
+
 
 
 struct Layout {
@@ -1055,6 +1130,24 @@ static float habCx(int k)  { return 488.0f - (6 - k) * 28.0f; }
 static RECT rcTab(int i);
 static void paintTabs(HDC dc, Gdiplus::Graphics &g);
 static Hit hitTestTabs(int x, int y);
+// Forward declarations для PRACTICE
+static int practiceMinutesToday();
+static int practiceStreak();
+static void saveLanguages();
+static void loadLanguages();
+static void cancelLangForm();
+static void commitLangForm();
+static RECT rcLfRow(int i);
+static RECT rcLfOkBtn();
+static RECT rcLfCancelBtn();
+// Forward declarations для формы практики
+static RECT rcPfTypeBox();
+static RECT rcPfMinBox();
+static RECT rcPfOkBtn();
+static RECT rcPfCancelBtn();
+static RECT rcPfPill(int i);
+static void cancelPracticeForm();
+static void commitPracticeForm();
 // Forward declarations для календаря и кнопок TODAY
 static RECT rcCalendarIcon();
 static RECT rcTodayAddTask(const Layout &L);
@@ -1063,6 +1156,35 @@ static RECT rcTodayAddWord(const Layout &L);
 
 static Hit hitTest(int x, int y) {
     Hit h = { H_NONE, -1, -1 };
+
+    // === Форма языков (приоритет выше практики) ===
+    if (g_langForm) {
+        if (ptIn(rcLfOkBtn(), x, y))     { h.kind = H_LF_OK;     return h; }
+        if (ptIn(rcLfCancelBtn(), x, y)) { h.kind = H_LF_CANCEL; return h; }
+        for (int i = 0; i < LANG_TEMPLATES_COUNT; i++) {
+            if (ptIn(rcLfRow(i), x, y)) {
+                h.kind = H_LF_ROW; h.idx = i; return h;
+            }
+        }
+        h.kind = H_NONE;
+        return h;
+    }
+
+    // === Форма практики (модальный режим) ===
+    if (g_practiceForm) {
+        if (ptIn(rcPfTypeBox(), x, y)) { h.kind = H_PF_TYPE;   return h; }
+        if (ptIn(rcPfMinBox(),  x, y)) { h.kind = H_PF_MIN;    return h; }
+        if (ptIn(rcPfOkBtn(),   x, y)) { h.kind = H_PF_OK;     return h; }
+        if (ptIn(rcPfCancelBtn(), x, y)) { h.kind = H_PF_CANCEL; return h; }
+        for (int i = 0; i < PRACTICE_TYPES_COUNT; i++) {
+            if (ptIn(rcPfPill(i), x, y)) {
+                h.kind = H_PF_PILL; h.idx = i; return h;
+            }
+        }
+        // Всё остальное клики — игнорируем, пока форма открыта
+        h.kind = H_NONE;
+        return h;
+    }
 
     // Сначала проверяем табы
     Hit ht = hitTestTabs(x, y);
@@ -1085,14 +1207,76 @@ static Hit hitTest(int x, int y) {
         if (ptIn(rcTodayAddWord(L), x, y))     { h.kind = H_TODAY_ADD_WORD;     return h; }
     }
 
-    // Кнопка "+ добавить практику" на вкладке PRACTICE
+    // Клики на вкладке LANGUAGE
+    if (g_activeTab == TAB_LANGUAGE) {
+        // Кнопка "+ добавить язык" — после списка языков
+        int y = sy(16) + 56;  // заголовок
+        if (languageCount == 0) {
+            y += 130;  // заглушка
+        } else {
+            for (int i = 0; i < languageCount; i++) {
+                y += 36 + 26 + 6 + 8 + 40;  // name + goal + bar + words
+            }
+        }
+        RECT rAdd = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+        if (ptIn(rAdd, x, y)) {
+            h.kind = H_LANG_ADD;
+            return h;
+        }
+    }
+
+    // Клики на вкладке PRACTICE
     if (g_activeTab == TAB_PRACTICE) {
-        // Зона — примерно под пилюлями
-        // Для простоты возьмём широкую зону в теле
-        if (y >= UI_BODY_TOP && y < UI_BODY_TOP + 500 &&
-            x >= UI_PAD && x < WIN_W - UI_PAD) {
-            h.kind = H_NONE;
-            h.idx = -1;
+        int py0 = sy(16);
+
+        // Пилюли типов практик
+        int pillY = py0 + 56 + 42 + 40 + 30;
+        int px = UI_PAD;
+        int py = pillY;
+        int pillH = 32;
+        HDC dc = GetDC(NULL);
+        SelectObject(dc, gF.seg10);
+        for (int i = 0; i < PRACTICE_TYPES_COUNT; i++) {
+            SIZE sz;
+            GetTextExtentPoint32W(dc, PRACTICE_TYPES[i], (int)wcslen(PRACTICE_TYPES[i]), &sz);
+            int pillW = sz.cx + 24;
+            if (px + pillW > WIN_W - UI_PAD) {
+                px = UI_PAD; py += pillH + 6;
+            }
+            RECT rp = { px, py, px + pillW, py + pillH };
+            if (ptIn(rp, x, y)) {
+                ReleaseDC(NULL, dc);
+                h.kind = H_PRACTICE_PILL;
+                h.idx = i;
+                return h;
+            }
+            px += pillW + 6;
+        }
+        ReleaseDC(NULL, dc);
+
+        // Кнопка "+ добавить практику"
+        int btnY = py + pillH + 24;
+        RECT rAdd = { UI_PAD, btnY, WIN_W - UI_PAD, btnY + 30 };
+        if (ptIn(rAdd, x, y)) {
+            h.kind = H_PRACTICE_ADD;
+            return h;
+        }
+
+        // Записи за сегодня (× для удаления)
+        int listY = btnY + 44 + 28;
+        wchar_t today[11];
+        getCurrentDate(today);
+        int shown = 0;
+        for (int i = practiceCount - 1; i >= 0 && shown < 5; i--) {
+            if (wcscmp(practices[i].date, today) != 0) continue;
+            int rowY = listY + shown * 30;
+            RECT rx = { WIN_W - UI_PAD - 24, rowY, WIN_W - UI_PAD, rowY + 30 };
+            if (ptIn(rx, x, y)) {
+                h.kind = H_PRACTICE_DEL;
+                h.idx = i;
+                return h;
+            }
+            shown++;
         }
     }
 
@@ -1304,26 +1488,73 @@ static void drawInputText(HDC dc, const RECT &ri, int textL, int avail,
 
 // ===== Шапка (закреплена) =====
 static void paintRing(HDC dc, Gdiplus::Graphics &g) {
+    // === Взвешенный прогресс ===
+    // Задачи (вес 3, пропорция), Практика (вес 1, пропорция от цели),
+    // Языки (вес 1, пока не считаем).
+
     int done, total;
     getTodayStats(&done, &total);
-    int pct = total > 0 ? (done * 100 + total / 2) / total : 0;
+
+    // === Вариант Б: фиксированный знаменатель = 5 ===
+    // Задачи 3 + Практика 1 + Языки 1 = 5
+    double score = 0.0;
+
+    // Задачи (вес 3) — пропорция done/total × 3
+    if (total > 0) {
+        score += ((double)done / (double)total) * 3.0;
+    }
+
+    // Практика (вес 1) — пропорция от цели, БЕЗ обрезки
+    if (practiceCount > 0) {
+        int mins = practiceMinutesToday();
+        double p = (double)mins / (double)g_practiceGoal;
+        score += p;
+    }
+
+    // Языки (вес 1) — потом
+    // if (languageCount > 0) { score += 0..1; }
+
+    int pct = (int)((score * 100.0 / 5.0) + 0.5);
 
     float cx = (float)(WIN_W - UI_PAD - UI_RING_D / 2), cy = (float)UI_RING_CY;
     float rad = UI_RING_D / 2.0f - 3.0f;
 
+    // === Внутреннее кольцо (0-100%) ===
     Gdiplus::Pen track(gc(CLR_DIVIDER), 6.0f);
     g.DrawEllipse(&track, cx - rad, cy - rad, rad * 2, rad * 2);
 
-    if (pct > 0) {
+    int innerPct = (pct > 100) ? 100 : pct;
+    if (innerPct > 0) {
         Gdiplus::LinearGradientBrush br(Gdiplus::PointF(cx, cy - rad - 3),
             Gdiplus::PointF(cx, cy + rad + 3), gc(CLR_ACCENT3), gc(CLR_ACCENT2));
         Gdiplus::Pen pen(&br, 6.0f);
-        if (pct >= 100) {
+        if (innerPct >= 100) {
             g.DrawEllipse(&pen, cx - rad, cy - rad, rad * 2, rad * 2);
         } else {
             pen.SetStartCap(Gdiplus::LineCapRound);
             pen.SetEndCap(Gdiplus::LineCapRound);
-            g.DrawArc(&pen, cx - rad, cy - rad, rad * 2, rad * 2, -90.0f, 360.0f * pct / 100.0f);
+            g.DrawArc(&pen, cx - rad, cy - rad, rad * 2, rad * 2,
+                      -90.0f, 360.0f * innerPct / 100.0f);
+        }
+    }
+
+    // === Внешнее кольцо (перевыполнение > 100%) ===
+    if (pct > 100) {
+        float radOut = rad + 10.0f;
+        Gdiplus::Pen trackOut(gc(CLR_DIVIDER), 4.0f);
+        g.DrawEllipse(&trackOut, cx - radOut, cy - radOut, radOut * 2, radOut * 2);
+
+        int outerPct = pct - 100;
+        if (outerPct > 100) outerPct = 100;
+
+        Gdiplus::Pen penOut(gc(CLR_ACCENT), 4.0f);
+        if (outerPct >= 100) {
+            g.DrawEllipse(&penOut, cx - radOut, cy - radOut, radOut * 2, radOut * 2);
+        } else {
+            penOut.SetStartCap(Gdiplus::LineCapRound);
+            penOut.SetEndCap(Gdiplus::LineCapRound);
+            g.DrawArc(&penOut, cx - radOut, cy - radOut, radOut * 2, radOut * 2,
+                      -90.0f, 360.0f * outerPct / 100.0f);
         }
     }
     g.Flush(Gdiplus::FlushIntentionSync);
@@ -1753,9 +1984,11 @@ static void paintToday(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
     DrawTextW(dc, buf, -1, &r2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     y += 40;
 
-    // Практика (заглушка)
+    // Практика (реальные данные)
+    int practiceMin = practiceMinutesToday();
+    swprintf(buf, 64, L"%d минут практики", practiceMin);
     RECT r3 = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
-    DrawTextW(dc, L"0 минут практики", -1, &r3, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextW(dc, buf, -1, &r3, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     y += 40;
 
     // Языки (заглушка)
@@ -1809,27 +2042,379 @@ static void paintTasksTab(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
     paintList(dc, g, L);
 }
 
-static void paintLanguageTab(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
-    SetBkMode(dc, TRANSPARENT);
-    int y = sy(40);
+// ===== Форма выбора языков =====
+static void cancelLangForm() {
+    g_langForm = false;
+    for (int i = 0; i < LANG_TEMPLATES_COUNT; i++) g_langSelected[i] = false;
+}
 
+static void commitLangForm() {
+    for (int i = 0; i < LANG_TEMPLATES_COUNT; i++) {
+        if (!g_langSelected[i]) continue;
+        if (languageCount >= MAX_LANGUAGES) break;
+        bool exists = false;
+        for (int j = 0; j < languageCount; j++) {
+            if (wcscmp(languages[j].name, LANG_TEMPLATES[i].name) == 0) {
+                exists = true; break;
+            }
+        }
+        if (exists) continue;
+        Language *lang = &languages[languageCount];
+        lang->id = languageCount + 1;
+        wcsncpy(lang->name, LANG_TEMPLATES[i].name, LANG_NAME_MAX - 1);
+        lang->name[LANG_NAME_MAX - 1] = 0;
+        wcsncpy(lang->goal, LANG_TEMPLATES[i].goal, LANG_GOAL_MAX - 1);
+        lang->goal[LANG_GOAL_MAX - 1] = 0;
+        lang->progress = LANG_TEMPLATES[i].progress;
+        lang->wordsTotal = LANG_TEMPLATES[i].wordsTotal;
+        lang->streakDays = LANG_TEMPLATES[i].streakDays;
+        languageCount++;
+    }
+    saveLanguages();
+    cancelLangForm();
+}
+
+static RECT rcLfRow(int i) {
+    int baseY = sy(16) + 60;
+    int rowH = 70;
+    RECT r = { UI_PAD, baseY + i * rowH, WIN_W - UI_PAD, baseY + i * rowH + rowH - 8 };
+    return r;
+}
+static RECT rcLfOkBtn() {
+    int baseY = sy(16) + 60 + LANG_TEMPLATES_COUNT * 70 + 20;
+    RECT r = { UI_PAD, baseY, UI_PAD + 200, baseY + 40 };
+    return r;
+}
+static RECT rcLfCancelBtn() {
+    int baseY = sy(16) + 60 + LANG_TEMPLATES_COUNT * 70 + 20;
+    RECT r = { UI_PAD + 220, baseY, UI_PAD + 340, baseY + 40 };
+    return r;
+}
+
+static void paintLangForm(HDC dc, Gdiplus::Graphics &g) {
+    SetBkMode(dc, TRANSPARENT);
+
+    SelectObject(dc, gF.disp20);
+    SetTextColor(dc, CLR_ACCENT);
+    RECT r1 = { UI_PAD, sy(16), WIN_W - UI_PAD, sy(16) + 40 };
+    DrawTextW(dc, L"ВЫБЕРИ ЯЗЫКИ", -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    for (int i = 0; i < LANG_TEMPLATES_COUNT; i++) {
+        RECT r = rcLfRow(i);
+        bool sel = g_langSelected[i];
+        bool hov = (g_hover.kind == H_LF_ROW && g_hover.idx == i);
+
+        if (hov) {
+            gFillRound(g, (float)r.left, (float)r.top,
+                       (float)(r.right - r.left), (float)(r.bottom - r.top), 8,
+                       CLR_SURFACE_HOV);
+        }
+
+        int cbSize = 20;
+        int cbX = r.left + 12;
+        int cbY = r.top + (r.bottom - r.top) / 2 - cbSize / 2;
+        if (sel) {
+            gFillRound(g, (float)cbX, (float)cbY, (float)cbSize, (float)cbSize, 4, CLR_ACCENT);
+            Gdiplus::Pen p(gc(CLR_BG), 2.0f);
+            g.DrawLine(&p, (float)(cbX + 5), (float)(cbY + 10),
+                           (float)(cbX + 9), (float)(cbY + 14));
+            g.DrawLine(&p, (float)(cbX + 9), (float)(cbY + 14),
+                           (float)(cbX + 16), (float)(cbY + 6));
+        } else {
+            gFillRound(g, (float)cbX, (float)cbY, (float)cbSize, (float)cbSize, 4, CLR_INPUT);
+            Gdiplus::Pen p(gc(CLR_MUTED), 1.0f);
+            g.DrawRectangle(&p, (float)cbX, (float)cbY, (float)cbSize, (float)cbSize);
+        }
+        g.Flush(Gdiplus::FlushIntentionSync);
+
+        SelectObject(dc, gF.seg11);
+        SetTextColor(dc, sel ? CLR_TEXT : CLR_MUTED);
+        RECT rn = { cbX + cbSize + 14, r.top, r.right - 20, r.top + 30 };
+        DrawTextW(dc, LANG_TEMPLATES[i].name, -1, &rn,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        SelectObject(dc, gF.seg9);
+        SetTextColor(dc, CLR_MUTED);
+        wchar_t desc[128];
+        swprintf(desc, 128, L"%ls · %d слов · %d дней",
+                 LANG_TEMPLATES[i].goal,
+                 LANG_TEMPLATES[i].wordsTotal,
+                 LANG_TEMPLATES[i].streakDays);
+        RECT rd = { cbX + cbSize + 14, r.top + 30, r.right - 20, r.bottom };
+        DrawTextW(dc, desc, -1, &rd,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    RECT okR = rcLfOkBtn();
+    gFillRound(g, (float)okR.left, (float)okR.top, 200.0f, 40.0f, 8, CLR_ACCENT);
+    g.Flush(Gdiplus::FlushIntentionSync);
+    SelectObject(dc, gF.seg10);
+    SetTextColor(dc, CLR_BG);
+    DrawTextW(dc, L"ДОБАВИТЬ ВЫБРАННЫЕ", -1, &okR,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    RECT ccR = rcLfCancelBtn();
+    SetTextColor(dc, CLR_MUTED);
+    DrawTextW(dc, L"Отмена", -1, &ccR,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void paintLanguageTab(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    if (g_langForm) {
+        paintLangForm(dc, g);
+        return;
+    }
+    SetBkMode(dc, TRANSPARENT);
+    int y = sy(16);
+
+    // Заголовок "ЯЗЫКИ"
     SelectObject(dc, gF.disp20);
     SetTextColor(dc, CLR_ACCENT);
     RECT r1 = { UI_PAD, y, WIN_W - UI_PAD, y + 40 };
     DrawTextW(dc, L"ЯЗЫКИ", -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    y += 60;
+    y += 56;
+
+    // Если языков нет — показать подсказку
+    if (languageCount == 0) {
+        SelectObject(dc, gF.seg11);
+        SetTextColor(dc, CLR_MUTED);
+        RECT r2 = { UI_PAD, y + 20, WIN_W - UI_PAD, y + 50 };
+        DrawTextW(dc, L"пока нет языков", -1, &r2,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, gF.seg10);
+        RECT r3 = { UI_PAD, y + 50, WIN_W - UI_PAD, y + 78 };
+        DrawTextW(dc, L"добавь первый — английский, армянский,", -1, &r3,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT r4 = { UI_PAD, y + 78, WIN_W - UI_PAD, y + 106 };
+        DrawTextW(dc, L"грузинский, китайский или свой", -1, &r4,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        y += 130;
+    } else {
+        // Список языков
+        for (int i = 0; i < languageCount; i++) {
+            Language *lang = &languages[i];
+
+            // Название языка — крупно
+            SelectObject(dc, gF.disp20);
+            SetTextColor(dc, CLR_TEXT);
+            RECT rn = { UI_PAD, y, WIN_W - UI_PAD, y + 34 };
+            DrawTextW(dc, lang->name, -1, &rn,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            y += 36;
+
+            // Цель — мелким
+            SelectObject(dc, gF.seg10);
+            SetTextColor(dc, CLR_MUTED);
+            RECT rg = { UI_PAD, y, WIN_W - UI_PAD, y + 22 };
+            DrawTextW(dc, lang->goal, -1, &rg,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            y += 26;
+
+            // Прогресс-бар: фон
+            int barW = WIN_W - UI_PAD * 2;
+            int barH = 6;
+            gFillRound(g, (float)UI_PAD, (float)y, (float)barW, (float)barH, 3.0f, CLR_DIVIDER);
+            // Заполнение
+            int fill = barW * lang->progress / 100;
+            if (fill > 0) {
+                gFillRound(g, (float)UI_PAD, (float)y, (float)fill, (float)barH, 3.0f, CLR_ACCENT);
+            }
+            g.Flush(Gdiplus::FlushIntentionSync);
+            y += barH + 8;
+
+            // Слова + streak
+            SelectObject(dc, gF.seg9);
+            SetTextColor(dc, CLR_MUTED);
+            wchar_t buf[64];
+            swprintf(buf, 64, L"%d слов · %d дней", lang->wordsTotal, lang->streakDays);
+            RECT rs = { UI_PAD, y, WIN_W - UI_PAD, y + 20 };
+            DrawTextW(dc, buf, -1, &rs,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+            // Процент справа
+            swprintf(buf, 64, L"%d%%", lang->progress);
+            SetTextColor(dc, CLR_ACCENT);
+            RECT rp = { WIN_W - UI_PAD - 80, y, WIN_W - UI_PAD, y + 20 };
+            DrawTextW(dc, buf, -1, &rp,
+                      DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+            y += 40;
+        }
+    }
+
+    // Кнопка "+ добавить язык"
+    SelectObject(dc, gF.seg11);
+    bool hovAdd = (g_hover.kind == H_LANG_ADD);
+    SetTextColor(dc, hovAdd ? CLR_TEXT : CLR_ACCENT);
+    RECT rAdd = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+    DrawTextW(dc, L"+ добавить язык", -1, &rAdd,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+
+// ===== Форма добавления практики =====
+static void cancelPracticeForm() {
+    g_practiceForm = false;
+    g_practiceTypeInput[0] = 0; g_practiceTypeLen = 0;
+    g_practiceMinInput[0] = 0; g_practiceMinLen = 0;
+    g_practiceField = 0;
+}
+
+static void commitPracticeForm() {
+    if (g_practiceTypeLen == 0) { cancelPracticeForm(); return; }
+    int mins = _wtoi(g_practiceMinInput);
+    if (mins <= 0) mins = 30;
+    if (practiceCount < MAX_PRACTICES) {
+        Practice *p = &practices[practiceCount];
+        p->id = practiceCount + 1;
+        getCurrentDate(p->date);
+        wcsncpy(p->type, g_practiceTypeInput, PRACT_NAME_MAX - 1);
+        p->type[PRACT_NAME_MAX - 1] = 0;
+        p->minutes = mins;
+        practiceCount++;
+        savePractices();
+    }
+    cancelPracticeForm();
+}
+
+// ===== Зоны формы PRACTICE (единая база) =====
+// Схема:
+// baseY+0   .. +40  : заголовок "НОВАЯ ПРАКТИКА"
+// baseY+60  .. +80  : label "ТИП ПРАКТИКИ"
+// baseY+82  .. +122 : поле ввода типа
+// baseY+134 .. +156 : label "БЫСТРЫЙ ВЫБОР"
+// baseY+158 .. +234 : пилюли (2 ряда по 4)
+// baseY+246 .. +266 : label "МИНУТЫ"
+// baseY+268 .. +308 : поле минут
+// baseY+328 .. +364 : кнопки ДОБАВИТЬ/Отмена
+
+static RECT rcPfTypeBox() {
+    int y = sy(16) + 82;
+    RECT r = { UI_PAD, y, WIN_W - UI_PAD, y + 40 };
+    return r;
+}
+static RECT rcPfMinBox() {
+    int y = sy(16) + 268;
+    RECT r = { UI_PAD, y, UI_PAD + 120, y + 40 };
+    return r;
+}
+static RECT rcPfOkBtn() {
+    int y = sy(16) + 328;
+    RECT r = { UI_PAD, y, UI_PAD + 140, y + 36 };
+    return r;
+}
+static RECT rcPfCancelBtn() {
+    int y = sy(16) + 328;
+    RECT r = { UI_PAD + 160, y, UI_PAD + 280, y + 36 };
+    return r;
+}
+static RECT rcPfPill(int i) {
+    int y0 = sy(16) + 158;
+    int row = i / 4;
+    int col = i % 4;
+    int pillW = (WIN_W - UI_PAD * 2 - 18) / 4;
+    int x = UI_PAD + col * (pillW + 6);
+    int y = y0 + row * 38;
+    RECT r = { x, y, x + pillW, y + 32 };
+    return r;
+}
+
+static void paintPracticeForm(HDC dc, Gdiplus::Graphics &g) {
+    SetBkMode(dc, TRANSPARENT);
+
+    // Заголовок
+    SelectObject(dc, gF.disp20);
+    SetTextColor(dc, CLR_ACCENT);
+    RECT r1 = { UI_PAD, sy(16), WIN_W - UI_PAD, sy(16) + 40 };
+    DrawTextW(dc, L"НОВАЯ ПРАКТИКА", -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // Label "ТИП ПРАКТИКИ"
+    SelectObject(dc, gF.seg10);
+    SetTextColor(dc, CLR_MUTED);
+    RECT rlbl = { UI_PAD, sy(16) + 60, WIN_W - UI_PAD, sy(16) + 80 };
+    DrawTextW(dc, L"ТИП ПРАКТИКИ", -1, &rlbl, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // Поле ввода типа
+    RECT rb = rcPfTypeBox();
+    bool typeActive = (g_practiceField == 0);
+    gFillRound(g, (float)rb.left, (float)rb.top, (float)(rb.right - rb.left), 40.0f, 8, CLR_INPUT);
+    gStrokeRound(g, rb.left + 0.5f, rb.top + 0.5f, (float)(rb.right - rb.left) - 1, 39.0f, 8,
+                 typeActive ? CLR_ACCENT : CLR_DIVIDER, 1.0f);
+    g.Flush(Gdiplus::FlushIntentionSync);
 
     SelectObject(dc, gF.seg11);
-    SetTextColor(dc, CLR_MUTED);
-    RECT r2 = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
-    DrawTextW(dc, L"скоро: английский, армянский,", -1, &r2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    y += 30;
+    RECT rt = { rb.left + 14, rb.top, rb.right - 14, rb.bottom };
+    if (g_practiceTypeLen == 0) {
+        SetTextColor(dc, CLR_MUTED);
+        DrawTextW(dc, L"Yoga, Плавание, Танцы...", -1, &rt,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    } else {
+        SetTextColor(dc, CLR_TEXT);
+        DrawTextW(dc, g_practiceTypeInput, -1, &rt,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
 
-    RECT r3 = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
-    DrawTextW(dc, L"грузинский, китайский", -1, &r3, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    // Label "БЫСТРЫЙ ВЫБОР"
+    SelectObject(dc, gF.seg10);
+    SetTextColor(dc, CLR_MUTED);
+    RECT rbs = { UI_PAD, sy(16) + 134, WIN_W - UI_PAD, sy(16) + 156 };
+    DrawTextW(dc, L"БЫСТРЫЙ ВЫБОР", -1, &rbs, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // Пилюли
+    SelectObject(dc, gF.seg9);
+    for (int i = 0; i < PRACTICE_TYPES_COUNT; i++) {
+        RECT rp = rcPfPill(i);
+        bool hov = (g_hover.kind == H_PF_PILL && g_hover.idx == i);
+        gFillRound(g, (float)rp.left, (float)rp.top,
+                   (float)(rp.right - rp.left), 32.0f, 16,
+                   hov ? CLR_SURFACE_HOV : CLR_SURFACE);
+        SetTextColor(dc, hov ? CLR_ACCENT : CLR_TEXT);
+        DrawTextW(dc, PRACTICE_TYPES[i], -1, &rp,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    g.Flush(Gdiplus::FlushIntentionSync);
+
+    // Label "МИНУТЫ"
+    SelectObject(dc, gF.seg10);
+    SetTextColor(dc, CLR_MUTED);
+    RECT rml = { UI_PAD, sy(16) + 246, WIN_W - UI_PAD, sy(16) + 266 };
+    DrawTextW(dc, L"МИНУТЫ", -1, &rml, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // Поле минут
+    RECT rmb = rcPfMinBox();
+    bool minActive = (g_practiceField == 1);
+    gFillRound(g, (float)rmb.left, (float)rmb.top, 120.0f, 40.0f, 8, CLR_INPUT);
+    gStrokeRound(g, rmb.left + 0.5f, rmb.top + 0.5f, 119.0f, 39.0f, 8,
+                 minActive ? CLR_ACCENT : CLR_DIVIDER, 1.0f);
+    g.Flush(Gdiplus::FlushIntentionSync);
+
+    SelectObject(dc, gF.seg11);
+    SetTextColor(dc, CLR_TEXT);
+    RECT rmv = { rmb.left + 14, rmb.top, rmb.right - 14, rmb.bottom };
+    if (g_practiceMinLen == 0) {
+        SetTextColor(dc, CLR_MUTED);
+        DrawTextW(dc, L"30", -1, &rmv, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    } else {
+        DrawTextW(dc, g_practiceMinInput, -1, &rmv, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    // Кнопки
+    RECT okR = rcPfOkBtn();
+    gFillRound(g, (float)okR.left, (float)okR.top, 140.0f, 36.0f, 8, CLR_ACCENT);
+    g.Flush(Gdiplus::FlushIntentionSync);
+    SelectObject(dc, gF.seg11);
+    SetTextColor(dc, CLR_BG);
+    DrawTextW(dc, L"ДОБАВИТЬ", -1, &okR, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    RECT ccR = rcPfCancelBtn();
+    SetTextColor(dc, CLR_MUTED);
+    DrawTextW(dc, L"Отмена", -1, &ccR, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 static void paintPracticeTab(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    if (g_practiceForm) {
+        paintPracticeForm(dc, g);
+        return;
+    }
     SetBkMode(dc, TRANSPARENT);
     int y = sy(16);
 
@@ -2055,6 +2640,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             loadFromFile();
             loadHabits();
             loadPractices();
+            loadLanguages();
             refreshList();
             return 0;
         }
@@ -2125,6 +2711,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 
         case WM_LBUTTONDOWN: {
             SetFocus(hWnd);
+            SetActiveWindow(hWnd);
             Hit h = hitTest((int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam));
             switch (h.kind) {
                 case H_ADD:   g_focus = FOCUS_TASK; addZapis(hWnd);    break;
@@ -2170,19 +2757,73 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 case H_CALENDAR_ICON:
                     MessageBoxW(hWnd, L"Календарь скоро!", L"Focus Bitch", MB_OK | MB_ICONINFORMATION);
                     break;
-                case H_PRACTICE_ADD:
-                    if (g_activeTab == TAB_PRACTICE) {
-                        // Быстрое добавление 30 мин практики "Yoga"
-                        if (practiceCount < MAX_PRACTICES) {
-                            Practice *p = &practices[practiceCount];
-                            p->id = practiceCount + 1;
-                            getCurrentDate(p->date);
-                            wcscpy(p->type, L"Yoga");
-                            p->minutes = 30;
-                            practiceCount++;
-                            savePractices();
-                            InvalidateRect(hWnd, NULL, FALSE);
+                case H_LF_ROW:
+                    if (h.idx >= 0 && h.idx < LANG_TEMPLATES_COUNT)
+                        g_langSelected[h.idx] = !g_langSelected[h.idx];
+                    break;
+                case H_LF_OK:
+                    commitLangForm();
+                    break;
+                case H_LF_CANCEL:
+                    cancelLangForm();
+                    break;
+                case H_LANG_ADD:
+                    g_langForm = true;
+                    for (int i = 0; i < LANG_TEMPLATES_COUNT; i++) g_langSelected[i] = false;
+                    break;
+                case H_PF_TYPE:
+                    g_practiceField = 0;
+                    break;
+                case H_PF_MIN:
+                    g_practiceField = 1;
+                    break;
+                case H_PF_OK:
+                    commitPracticeForm();
+                    break;
+                case H_PF_CANCEL:
+                    cancelPracticeForm();
+                    break;
+                case H_PF_PILL:
+                    if (h.idx >= 0 && h.idx < PRACTICE_TYPES_COUNT) {
+                        wcsncpy(g_practiceTypeInput, PRACTICE_TYPES[h.idx], PRACT_NAME_MAX - 1);
+                        g_practiceTypeInput[PRACT_NAME_MAX - 1] = 0;
+                        g_practiceTypeLen = (int)wcslen(g_practiceTypeInput);
+                        g_practiceField = 1;  // переход к минутам
+                        if (g_practiceMinLen == 0) {
+                            wcscpy(g_practiceMinInput, L"30");
+                            g_practiceMinLen = 2;
                         }
+                    }
+                    break;
+                case H_PRACTICE_ADD:
+                    // Открыть форму добавления
+                    g_practiceForm = true;
+                    g_practiceField = 0;
+                    g_practiceTypeInput[0] = 0; g_practiceTypeLen = 0;
+                    g_practiceMinInput[0] = 0; g_practiceMinLen = 0;
+                    g_caretOn = true;
+                    break;
+                case H_PRACTICE_PILL:
+                    // Клик на пилюле на странице PRACTICE (не в форме) —
+                    // открываем форму с предзаполненным типом
+                    g_practiceForm = true;
+                    g_practiceField = 1;
+                    if (h.idx >= 0 && h.idx < PRACTICE_TYPES_COUNT) {
+                        wcsncpy(g_practiceTypeInput, PRACTICE_TYPES[h.idx], PRACT_NAME_MAX - 1);
+                        g_practiceTypeInput[PRACT_NAME_MAX - 1] = 0;
+                        g_practiceTypeLen = (int)wcslen(g_practiceTypeInput);
+                    }
+                    wcscpy(g_practiceMinInput, L"30");
+                    g_practiceMinLen = 2;
+                    g_caretOn = true;
+                    break;
+                case H_PRACTICE_DEL:
+                    if (h.idx >= 0 && h.idx < practiceCount) {
+                        for (int i = h.idx; i < practiceCount - 1; i++)
+                            practices[i] = practices[i + 1];
+                        practiceCount--;
+                        savePractices();
+                        InvalidateRect(hWnd, NULL, FALSE);
                     }
                     break;
                 default:          g_selected = -1; break;
@@ -2205,6 +2846,23 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 
         case WM_CHAR: {
             wchar_t c = (wchar_t)wParam;
+
+            // Форма практики — ввод в поля
+            if (g_practiceForm) {
+                if (c >= 32 && c != 127) {
+                    if (g_practiceField == 0 && g_practiceTypeLen < PRACT_NAME_MAX - 1) {
+                        g_practiceTypeInput[g_practiceTypeLen++] = c;
+                        g_practiceTypeInput[g_practiceTypeLen] = 0;
+                    } else if (g_practiceField == 1 && g_practiceMinLen < 6 && c >= L'0' && c <= L'9') {
+                        g_practiceMinInput[g_practiceMinLen++] = c;
+                        g_practiceMinInput[g_practiceMinLen] = 0;
+                    }
+                    g_caretOn = true;
+                    InvalidateRect(hWnd, NULL, FALSE);
+                }
+                return 0;
+            }
+
             TextBuf b = activeBuf();
             if (c >= 32 && c != 127 && *b.len < b.cap - 1) {
                 b.s[(*b.len)++] = c;
@@ -2216,6 +2874,37 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         }
 
         case WM_KEYDOWN: {
+            // Форма практики
+            if (g_practiceForm) {
+                if (wParam == VK_ESCAPE) {
+                    cancelPracticeForm();
+                    InvalidateRect(hWnd, NULL, FALSE);
+                    return 0;
+                }
+                if (wParam == VK_RETURN) {
+                    commitPracticeForm();
+                    InvalidateRect(hWnd, NULL, FALSE);
+                    return 0;
+                }
+                if (wParam == VK_TAB) {
+                    g_practiceField = (g_practiceField == 0) ? 1 : 0;
+                    InvalidateRect(hWnd, NULL, FALSE);
+                    return 0;
+                }
+                if (wParam == VK_BACK) {
+                    if (g_practiceField == 0 && g_practiceTypeLen > 0) {
+                        g_practiceTypeLen--;
+                        g_practiceTypeInput[g_practiceTypeLen] = 0;
+                    } else if (g_practiceField == 1 && g_practiceMinLen > 0) {
+                        g_practiceMinLen--;
+                        g_practiceMinInput[g_practiceMinLen] = 0;
+                    }
+                    InvalidateRect(hWnd, NULL, FALSE);
+                    return 0;
+                }
+                return 0;
+            }
+
             TextBuf b = activeBuf();
             if (wParam == VK_BACK) {
                 bufBackspace(b.s, b.len);
