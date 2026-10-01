@@ -24,3 +24,13 @@ fix_defines.py
 .vscode/
 .idea/
 *.user
+
+# Python scripts
+fix_*.py
+apply_*.py
+
+# Python backups
+*.py.bak
+
+# Text files
+*.txt

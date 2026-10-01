@@ -18,27 +18,31 @@
 #define ID_TIMER 1
 
 // ===== Палитра "aesthetic planner" =====
-#define CLR_BG          RGB(46, 58, 51)
-#define CLR_SURFACE     RGB(58, 74, 66)
-#define CLR_SURFACE_HOV RGB(74, 93, 83)
-#define CLR_INPUT       RGB(38, 48, 43)
-#define CLR_TEXT        RGB(237, 228, 211)
-#define CLR_MUTED       RGB(168, 163, 148)
-#define CLR_DIVIDER     RGB(79, 94, 85)
-#define CLR_ACCENT      RGB(201, 123, 90)
-#define CLR_ACCENT2     RGB(212, 168, 92)
-#define CLR_ACCENT3     RGB(122, 155, 118)
+#define CLR_BG          RGB(31, 24, 21)      // тёмный шоколад #1F1815
+#define CLR_SURFACE     RGB(42, 31, 26)      // чуть светлее #2A1F1A
+#define CLR_SURFACE_HOV RGB(58, 44, 36)      // hover #3A2C24
+#define CLR_INPUT       RGB(26, 19, 16)      // темнее фона #1A1310
+#define CLR_TEXT        RGB(232, 220, 200)   // cream #E8DCC8
+#define CLR_MUTED       RGB(168, 152, 128)   // приглушённый беж #A89880
+#define CLR_DIVIDER     RGB(58, 44, 34)      // еле видимый #3A2C22
+#define CLR_ACCENT      RGB(184, 149, 106)   // тёплое золото #B8956A
+#define CLR_ACCENT2     RGB(168, 152, 128)   // muted #A89880
+#define CLR_ACCENT3     RGB(122, 100, 72)    // тусклая бронза #7A6448
 
 #define WIN_W             560
 #define WIN_H             800
 #define UI_PAD            28
-#define UI_HEADER_H       185
+#define UI_HEADER_H       220
 #define UI_BODY_TOP       UI_HEADER_H
 #define UI_RING_D         88
 #define UI_RING_CY        62
 #define UI_STREAK_Y       114
 #define UI_STREAK_H       26
 #define UI_STRIP_Y        148
+#define UI_TABS_Y         182
+#define UI_TABS_H         32
+#define UI_TABS_Y         182
+#define UI_TABS_H         32
 #define UI_STRIP_H        28
 #define UI_INPUT_H        52
 #define UI_BTN_H          42
@@ -48,6 +52,8 @@
 #define UI_ROW            (UI_CARD_H + UI_CARD_GAP)
 #define HAB_ROW_H         40
 #define MAX_HABITS        50
+#define MAX_PRACTICES     2000
+#define PRACT_NAME_MAX    32
 #define HAB_NAME_MAX      64
 #define ID_TIMER_CARET    2
 #define STREAK_REQUIRE_ALL 1
@@ -143,12 +149,12 @@ static const wchar_t *g_displayFace = L"Georgia";
 static int g_displayWeight = FW_NORMAL;
 
 static const wchar_t *kFontFiles[12] = {
-    L"PlayfairDisplay-Black.ttf",      L"PlayfairDisplay-BlackItalic.ttf",
-    L"PlayfairDisplay-Bold.ttf",       L"PlayfairDisplay-BoldItalic.ttf",
-    L"PlayfairDisplay-ExtraBold.ttf",  L"PlayfairDisplay-ExtraBoldItalic.ttf",
-    L"PlayfairDisplay-Italic.ttf",     L"PlayfairDisplay-Medium.ttf",
-    L"PlayfairDisplay-MediumItalic.ttf", L"PlayfairDisplay-Regular.ttf",
-    L"PlayfairDisplay-SemiBold.ttf",   L"PlayfairDisplay-SemiBoldItalic.ttf"
+    L"Inter_28pt-Black.ttf",         L"Inter_28pt-Bold.ttf",
+    L"Inter_24pt-Black.ttf",         L"Inter_24pt-Bold.ttf",
+    L"Inter_18pt-Black.ttf",         L"Inter_18pt-Bold.ttf",
+    L"Inter_18pt-SemiBold.ttf",      L"Inter_18pt-Medium.ttf",
+    L"Inter_18pt-Regular.ttf",       L"Inter_18pt-Light.ttf",
+    L"Inter_24pt-SemiBold.ttf",      L"Inter_24pt-Regular.ttf"
 };
 static wchar_t g_fontLoaded[12][MAX_PATH];
 
@@ -183,12 +189,15 @@ static void loadAppFonts() {
         }
     }
 
-    if (faceAvailable(L"Playfair Display Black", FW_NORMAL)) {
-        g_displayFace = L"Playfair Display Black"; g_displayWeight = FW_NORMAL;
-    } else if (faceAvailable(L"Playfair Display", FW_BLACK)) {
-        g_displayFace = L"Playfair Display";       g_displayWeight = FW_BLACK;
+    if (faceAvailable(L"Inter", FW_BLACK)) {
+        g_displayFace = L"Inter"; g_displayWeight = FW_BLACK;
+    } else if (faceAvailable(L"Inter", FW_HEAVY)) {
+        g_displayFace = L"Inter"; g_displayWeight = FW_HEAVY;
+    } else if (faceAvailable(L"Inter", FW_BOLD)) {
+        g_displayFace = L"Inter"; g_displayWeight = FW_BOLD;
     } else {
-        OutputDebugStringW(L"[planner] Playfair Display not found, using Georgia\n");
+        g_displayFace = L"Segoe UI"; g_displayWeight = FW_BOLD;
+        OutputDebugStringW(L"[planner] Inter not found, using Segoe UI\n");
     }
 }
 
@@ -338,9 +347,16 @@ void getCurrentTime(wchar_t *buffer) {
 
 // ===== Состояние и данные главного окна =====
 enum { H_NONE = 0, H_ADD, H_DEL, H_HIDE, H_INPUT, H_PRIO, H_CHECK, H_CARD,
-       H_HAB_CHECK, H_HAB_DEL, H_HAB_ROW, H_HAB_ADDBTN, H_HAB_INPUT, H_HAB_OK };
+       H_HAB_CHECK, H_HAB_DEL, H_HAB_ROW, H_HAB_ADDBTN, H_HAB_INPUT, H_HAB_OK,
+       H_TAB, H_TODAY_ADD_TASK, H_TODAY_ADD_PRACTICE, H_TODAY_ADD_WORD, H_CALENDAR_ICON,
+       H_PRACTICE_ADD };
 struct Hit { int kind; int idx; int idx2; };
 enum { FOCUS_TASK = 0, FOCUS_HABIT };
+enum { TAB_TODAY = 0, TAB_HABITS, TAB_TASKS, TAB_LANGUAGE, TAB_PRACTICE, TAB_COUNT };
+static const wchar_t *TAB_NAMES[TAB_COUNT] = {
+    L"TODAY", L"HABITS", L"TASKS", L"LANGUAGE", L"PRACTICE"
+};
+static int g_activeTab = TAB_TODAY;
 
 static Hit  g_hover    = { H_NONE, -1, -1 };
 static wchar_t g_input[MAX_DLINA] = L"";
@@ -371,6 +387,24 @@ struct Habit {
     bool done[7];
 };
 struct HabitFileHeader { int version; int weekKey; int count; };
+
+struct Practice {
+    int id;
+    wchar_t date[11];          // ДД.ММ.ГГГГ
+    wchar_t type[PRACT_NAME_MAX]; // Yoga, Gym, Tennis...
+    int minutes;
+};
+struct PracticeFileHeader { int version; int count; };
+
+static Practice practices[MAX_PRACTICES];
+static int practiceCount = 0;
+static const wchar_t *PRACTICES_FILE = L"practices.dat";
+
+// Типы практик по умолчанию
+static const wchar_t *PRACTICE_TYPES[] = {
+    L"Yoga", L"Stretching", L"Gym", L"Boxing", L"Tennis", L"Run", L"Другое"
+};
+#define PRACTICE_TYPES_COUNT 7
 
 static Habit habits[MAX_HABITS];
 static int habitCount = 0;
@@ -480,6 +514,59 @@ static void loadHabits() {
     fclose(f);
     rolloverHabits();
 }
+
+// ===== Practice: сохранение / загрузка =====
+static void savePractices() {
+    FILE *f = _wfopen(PRACTICES_FILE, L"wb");
+    if (!f) return;
+    PracticeFileHeader h = { 1, practiceCount };
+    fwrite(&h, sizeof(h), 1, f);
+    fwrite(practices, sizeof(Practice), practiceCount, f);
+    fclose(f);
+}
+
+static void loadPractices() {
+    practiceCount = 0;
+    FILE *f = _wfopen(PRACTICES_FILE, L"rb");
+    if (!f) return;
+    PracticeFileHeader h;
+    if (fread(&h, sizeof(h), 1, f) == 1 && h.version == 1 && h.count >= 0) {
+        if (h.count > MAX_PRACTICES) h.count = MAX_PRACTICES;
+        practiceCount = (int)fread(practices, sizeof(Practice), h.count, f);
+    }
+    fclose(f);
+}
+
+// Минут практики за сегодня
+static int practiceMinutesToday() {
+    wchar_t today[11];
+    getCurrentDate(today);
+    int sum = 0;
+    for (int i = 0; i < practiceCount; i++)
+        if (wcscmp(practices[i].date, today) == 0)
+            sum += practices[i].minutes;
+    return sum;
+}
+
+// Streak практики (дни подряд)
+static int practiceStreak() {
+    int dn[MAX_PRACTICES];
+    for (int i = 0; i < practiceCount; i++) dn[i] = parseDayNumber(practices[i].date);
+    int d = todayDayNumber();
+    // если сегодня ещё не было, начинаем со вчера
+    bool todayDone = false;
+    for (int i = 0; i < practiceCount; i++) if (dn[i] == d) { todayDone = true; break; }
+    if (!todayDone) d--;
+    int s = 0;
+    while (s < 365) {
+        bool done = false;
+        for (int i = 0; i < practiceCount; i++) if (dn[i] == d) { done = true; break; }
+        if (!done) break;
+        s++; d--;
+    }
+    return s;
+}
+
 
 struct Layout {
     int habTitle, habRows, habAdd, taskTitle, inputY, btnY, listY, contentH;
@@ -638,7 +725,7 @@ HRGN createRoundedRegion(int w, int h, int radius) {
 LRESULT CALLBACK PopupProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
-            g_fTitle = makeFont(g_displayFace, 26, TRUE, g_displayWeight);
+            g_fTitle = makeFont(g_displayFace, 26, FALSE, g_displayWeight);
             g_fText  = makeFont(L"Segoe UI", 10, FALSE, FW_NORMAL);
             g_fDate  = makeFont(L"Segoe UI",  8, FALSE, FW_NORMAL);
             return 0;
@@ -662,10 +749,16 @@ LRESULT CALLBACK PopupProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
             SelectObject(memDC, g_fTitle);
             SetTextColor(memDC, CLR_TEXT);
-            RECT rcTitle = {PAD, 8, rc.right - PAD, 50};
-            DrawTextW(memDC, L"planner", -1, &rcTitle,
+            RECT rcTitle = {PAD, 8, rc.right - PAD, 42};
+            DrawTextW(memDC, L"FOCUS BITCH.", -1, &rcTitle,
                       DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            fillRectColor(memDC, PAD, 52, rc.right - PAD, 53, CLR_DIVIDER);
+
+            SelectObject(memDC, g_fDate);
+            SetTextColor(memDC, CLR_MUTED);
+            RECT rcSub = {PAD, 42, rc.right - PAD, 56};
+            DrawTextW(memDC, L"follow the plan, not the mood.", -1, &rcSub,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            fillRectColor(memDC, PAD, 58, rc.right - PAD, 59, CLR_DIVIDER);
 
             int y = 58;
             int shown = 0;
@@ -958,10 +1051,50 @@ static float prioCx(int k) { return (float)(WIN_W - UI_PAD - 20 - (2 - k) * 22);
 static float habCx(int k)  { return 488.0f - (6 - k) * 28.0f; }
 #define HAB_DEL_CX 520.0f
 
+// Forward declarations для табов
+static RECT rcTab(int i);
+static void paintTabs(HDC dc, Gdiplus::Graphics &g);
+static Hit hitTestTabs(int x, int y);
+// Forward declarations для календаря и кнопок TODAY
+static RECT rcCalendarIcon();
+static RECT rcTodayAddTask(const Layout &L);
+static RECT rcTodayAddPractice(const Layout &L);
+static RECT rcTodayAddWord(const Layout &L);
+
 static Hit hitTest(int x, int y) {
     Hit h = { H_NONE, -1, -1 };
+
+    // Сначала проверяем табы
+    Hit ht = hitTestTabs(x, y);
+    if (ht.kind != H_NONE) return ht;
+
+    // Иконка календаря в шапке
+    RECT calIcon = rcCalendarIcon();
+    if (ptIn(calIcon, x, y)) {
+        h.kind = H_CALENDAR_ICON;
+        return h;
+    }
+
     if (y < UI_BODY_TOP) return h;
     Layout L = getLayout();
+
+    // Кнопки быстрых действий (только на вкладке TODAY)
+    if (g_activeTab == TAB_TODAY) {
+        if (ptIn(rcTodayAddTask(L), x, y))     { h.kind = H_TODAY_ADD_TASK;     return h; }
+        if (ptIn(rcTodayAddPractice(L), x, y)) { h.kind = H_TODAY_ADD_PRACTICE; return h; }
+        if (ptIn(rcTodayAddWord(L), x, y))     { h.kind = H_TODAY_ADD_WORD;     return h; }
+    }
+
+    // Кнопка "+ добавить практику" на вкладке PRACTICE
+    if (g_activeTab == TAB_PRACTICE) {
+        // Зона — примерно под пилюлями
+        // Для простоты возьмём широкую зону в теле
+        if (y >= UI_BODY_TOP && y < UI_BODY_TOP + 500 &&
+            x >= UI_PAD && x < WIN_W - UI_PAD) {
+            h.kind = H_NONE;
+            h.idx = -1;
+        }
+    }
 
     for (int i = 0; i < habitCount; i++) {
         int top = sy(L.habRows + i * HAB_ROW_H);
@@ -1198,13 +1331,15 @@ static void paintRing(HDC dc, Gdiplus::Graphics &g) {
     wchar_t buf[8];
     swprintf(buf, 8, L"%d%%", pct);
     SetBkMode(dc, TRANSPARENT);
-    SelectObject(dc, gF.disp20);
+    // Цифра процента — крупный Inter Bold
+    SelectObject(dc, gF.seg11);
     SetTextColor(dc, CLR_TEXT);
-    RECT r1 = { (int)cx - 38, (int)cy - 27, (int)cx + 38, (int)cy + 5 };
+    RECT r1 = { (int)cx - 38, (int)cy - 24, (int)cx + 38, (int)cy + 6 };
     DrawTextW(dc, buf, -1, &r1, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    // Подпись — мелкий Segoe
     SelectObject(dc, gF.seg8);
     SetTextColor(dc, CLR_MUTED);
-    RECT r2 = { (int)cx - 38, (int)cy + 7, (int)cx + 38, (int)cy + 23 };
+    RECT r2 = { (int)cx - 38, (int)cy + 8, (int)cx + 38, (int)cy + 24 };
     DrawTextW(dc, L"выполнено", -1, &r2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -1273,10 +1408,41 @@ static void paintHeader(HDC dc, Gdiplus::Graphics &g) {
     RECT r1 = { UI_PAD, 12, 420, 32 };
     DrawTextW(dc, d, -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
+    // Иконка календаря
+    {
+        RECT ic = rcCalendarIcon();
+        bool ihover = (g_hover.kind == H_CALENDAR_ICON);
+        COLORREF col = ihover ? CLR_ACCENT : CLR_MUTED;
+        // Квадрат-календарь: рамка + верхняя полоска + сетка
+        Gdiplus::Pen pen(gc(col), 1.0f);
+        float x = (float)ic.left, yy = (float)ic.top;
+        float sz = (float)(ic.right - ic.left);
+        g.DrawRectangle(&pen, x, yy, sz, sz);
+        g.DrawLine(&pen, x, yy + sz * 0.3f, x + sz, yy + sz * 0.3f);
+        // Точки-сетка внутри
+        for (int gy = 0; gy < 2; gy++) {
+            for (int gx = 0; gx < 3; gx++) {
+                float dx = x + sz * (0.25f + gx * 0.25f);
+                float dy = yy + sz * (0.55f + gy * 0.2f);
+                Gdiplus::SolidBrush dotBrush(gc(col));
+                g.FillEllipse(&dotBrush, dx - 0.8f, dy - 0.8f, 1.6f, 1.6f);
+            }
+        }
+        g.Flush(Gdiplus::FlushIntentionSync);
+    }
+
     SelectObject(dc, gF.disp36);
     SetTextColor(dc, CLR_TEXT);
-    RECT r2 = { UI_PAD, 32, 430, 106 };
-    DrawTextW(dc, L"planner", -1, &r2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT r2 = { UI_PAD, 32, 430, 96 };
+    DrawTextW(dc, L"FOCUS BITCH.", -1, &r2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    SelectObject(dc, gF.seg10);
+    SetTextColor(dc, CLR_MUTED);
+    RECT r3 = { UI_PAD, 96, 430, 116 };
+    DrawTextW(dc, L"follow the plan, not the mood.", -1, &r3,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    paintTabs(dc, g);
 
     fillRectColor(dc, 0, UI_HEADER_H - 1, WIN_W, UI_HEADER_H, CLR_DIVIDER);
 }
@@ -1312,10 +1478,10 @@ static void paintHabits(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
 
     SetBkMode(dc, TRANSPARENT);
     int ty = sy(L.habTitle);
-    SelectObject(dc, gF.disp16);
-    SetTextColor(dc, CLR_TEXT);
+    SelectObject(dc, gF.seg9);
+    SetTextColor(dc, CLR_MUTED);
     RECT rt = { UI_PAD, ty, 300, ty + 36 };
-    DrawTextW(dc, L"привычки", -1, &rt, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextW(dc, L"ПРИВЫЧКИ", -1, &rt, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     static const wchar_t *wk[7] = { L"Пн", L"Вт", L"Ср", L"Чт", L"Пт", L"Сб", L"Вс" };
     SelectObject(dc, gF.seg8);
@@ -1359,10 +1525,10 @@ static void paintHabits(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
 static void paintTaskHeader(HDC dc, const Layout &L) {
     int ty = sy(L.taskTitle);
     SetBkMode(dc, TRANSPARENT);
-    SelectObject(dc, gF.disp16);
-    SetTextColor(dc, CLR_TEXT);
+    SelectObject(dc, gF.seg9);
+    SetTextColor(dc, CLR_MUTED);
     RECT rt = { UI_PAD, ty, 300, ty + 36 };
-    DrawTextW(dc, L"задачи", -1, &rt, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextW(dc, L"ЗАДАЧИ", -1, &rt, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
 static void paintInput(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
@@ -1401,42 +1567,31 @@ static void paintButtons(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
 }
 
 static void paintEmpty(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
-    using namespace Gdiplus;
-    float ox = WIN_W / 2.0f, oy = (float)(sy(L.listY) + 60);
+    // Пустое состояние — только типографика, без иллюстраций
+    int cy = sy(L.listY) + 80;
 
-    Pen pen(gc(CLR_MUTED, 210), 2.0f);
-    pen.SetStartCap(LineCapRound);
-    pen.SetEndCap(LineCapRound);
-    pen.SetLineJoin(LineJoinRound);
+    // Верхняя тонкая линия
+    gFillRound(g, (float)(WIN_W/2 - 12), (float)cy, 24.0f, 1.0f, 0.5f, CLR_DIVIDER);
 
-    GraphicsPath cup;
-    cup.AddLine(ox - 34.0f, oy, ox + 34.0f, oy);
-    cup.AddLine(ox + 34.0f, oy, ox + 34.0f, oy + 36.0f);
-    cup.AddArc(ox - 6.0f, oy + 16.0f, 40.0f, 40.0f, 0.0f, 90.0f);
-    cup.AddLine(ox + 14.0f, oy + 56.0f, ox - 14.0f, oy + 56.0f);
-    cup.AddArc(ox - 34.0f, oy + 16.0f, 40.0f, 40.0f, 90.0f, 90.0f);
-    cup.CloseFigure();
-    g.DrawPath(&pen, &cup);
-    g.DrawArc(&pen, ox + 22.0f, oy + 10.0f, 28.0f, 26.0f, -90.0f, 180.0f);
-    g.DrawLine(&pen, ox - 52.0f, oy + 66.0f, ox + 52.0f, oy + 66.0f);
-
-    static const float sx[3] = { -14.0f, 0.0f, 14.0f };
-    static const float sh[3] = { 26.0f, 36.0f, 26.0f };
-    for (int i = 0; i < 3; i++) {
-        float x = ox + sx[i];
-        g.DrawBezier(&pen, x, oy - 8.0f, x + 8.0f, oy - 8.0f - sh[i] * 0.35f,
-                     x - 8.0f, oy - 8.0f - sh[i] * 0.7f, x, oy - 8.0f - sh[i]);
-    }
-    g.Flush(FlushIntentionSync);
-
+    // Главная фраза
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, CLR_MUTED);
-    SelectObject(dc, gF.disp16);
-    RECT r1 = { 0, (int)oy + 90, WIN_W, (int)oy + 122 };
-    DrawTextW(dc, L"тут пока пусто", -1, &r1, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, gF.disp20);
+    SetTextColor(dc, CLR_TEXT);
+    RECT r1 = { 0, cy + 20, WIN_W, cy + 60 };
+    DrawTextW(dc, L"just start.", -1, &r1,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    // Подпись
     SelectObject(dc, gF.seg10);
-    RECT r2 = { 0, (int)oy + 124, WIN_W, (int)oy + 146 };
-    DrawTextW(dc, L"Добавь первую запись", -1, &r2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(dc, CLR_MUTED);
+    RECT r2 = { 0, cy + 60, WIN_W, cy + 90 };
+    DrawTextW(dc, L"добавь первую запись", -1, &r2,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    // Нижняя тонкая линия
+    gFillRound(g, (float)(WIN_W/2 - 12), (float)(cy + 100), 24.0f, 1.0f, 0.5f, CLR_DIVIDER);
+
+    g.Flush(Gdiplus::FlushIntentionSync);
 }
 
 static void paintList(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
@@ -1491,6 +1646,352 @@ static void paintList(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
     }
 }
 
+// ===== Табы (навигация) =====
+static RECT rcTab(int i) {
+    // 5 табов, распределены по ширине
+    int totalW = WIN_W - UI_PAD * 2;
+    int tabW = totalW / TAB_COUNT;
+    int x = UI_PAD + i * tabW;
+    RECT r = { x, UI_TABS_Y, x + tabW, UI_TABS_Y + UI_TABS_H };
+    return r;
+}
+
+static void paintTabs(HDC dc, Gdiplus::Graphics &g) {
+    SetBkMode(dc, TRANSPARENT);
+    SelectObject(dc, gF.seg9);
+
+    for (int i = 0; i < TAB_COUNT; i++) {
+        RECT r = rcTab(i);
+        bool active = (i == g_activeTab);
+        bool hover  = (g_hover.kind == H_TAB && g_hover.idx == i);
+
+        COLORREF col = active ? CLR_ACCENT : (hover ? CLR_TEXT : CLR_MUTED);
+        SetTextColor(dc, col);
+
+        DrawTextW(dc, TAB_NAMES[i], -1, &r,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        if (active) {
+            // Подчёркивание активного таба
+            int textW = 0;
+            SIZE sz;
+            GetTextExtentPoint32W(dc, TAB_NAMES[i], (int)wcslen(TAB_NAMES[i]), &sz);
+            textW = sz.cx;
+            int ux = (r.left + r.right) / 2 - textW / 2;
+            int uy = r.bottom - 2;
+            gFillRound(g, (float)ux, (float)uy, (float)textW, 1.0f, 0.5f, CLR_ACCENT);
+        }
+    }
+    g.Flush(Gdiplus::FlushIntentionSync);
+}
+
+static Hit hitTestTabs(int x, int y) {
+    Hit h = { H_NONE, -1, -1 };
+    if (y < UI_TABS_Y || y >= UI_TABS_Y + UI_TABS_H) return h;
+    for (int i = 0; i < TAB_COUNT; i++) {
+        RECT r = rcTab(i);
+        if (x >= r.left && x < r.right) {
+            h.kind = H_TAB;
+            h.idx = i;
+            return h;
+        }
+    }
+    return h;
+}
+
+// ===== Контент вкладок =====
+
+// ===== Зоны для кликов на TODAY и в шапке =====
+static RECT rcCalendarIcon() {
+    // Иконка календаря рядом с датой (в шапке)
+    // Дата рисуется с x=UI_PAD, y=12..32. Иконка справа от неё.
+    int dateW = 200;  // примерная ширина текста даты
+    int size = 18;
+    RECT r = { UI_PAD + dateW + 8, 14, UI_PAD + dateW + 8 + size, 14 + size };
+    return r;
+}
+
+static RECT rcTodayAddTask(const Layout &L) {
+    int y = sy(16) + 52 + 40 + 40 + 60;  // после сводки
+    RECT r = { UI_PAD, y, WIN_W - UI_PAD, y + 28 };
+    return r;
+}
+
+static RECT rcTodayAddPractice(const Layout &L) {
+    int y = sy(16) + 52 + 40 + 40 + 60 + 28;
+    RECT r = { UI_PAD, y, WIN_W - UI_PAD, y + 28 };
+    return r;
+}
+
+static RECT rcTodayAddWord(const Layout &L) {
+    int y = sy(16) + 52 + 40 + 40 + 60 + 28 + 28;
+    RECT r = { UI_PAD, y, WIN_W - UI_PAD, y + 28 };
+    return r;
+}
+
+static void paintToday(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    SetBkMode(dc, TRANSPARENT);
+    int y = sy(16);
+
+    // Заголовок "СЕГОДНЯ"
+    SelectObject(dc, gF.disp20);
+    SetTextColor(dc, CLR_ACCENT);
+    RECT r1 = { UI_PAD, y, WIN_W - UI_PAD, y + 40 };
+    DrawTextW(dc, L"СЕГОДНЯ", -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 52;
+
+    // Сводка
+    SelectObject(dc, gF.seg11);
+    SetTextColor(dc, CLR_TEXT);
+
+    wchar_t buf[64];
+    int done, total;
+    getTodayStats(&done, &total);
+
+    swprintf(buf, 64, L"%d из %d задач", done, total);
+    RECT r2 = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+    DrawTextW(dc, buf, -1, &r2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 40;
+
+    // Практика (заглушка)
+    RECT r3 = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+    DrawTextW(dc, L"0 минут практики", -1, &r3, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 40;
+
+    // Языки (заглушка)
+    RECT r4 = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+    DrawTextW(dc, L"0 языков сегодня", -1, &r4, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 60;
+
+    // Быстрые действия (кликабельные)
+    SelectObject(dc, gF.seg11);
+    y = sy(16) + 52 + 40 + 40 + 60;
+
+    bool h1 = (g_hover.kind == H_TODAY_ADD_TASK);
+    bool h2 = (g_hover.kind == H_TODAY_ADD_PRACTICE);
+    bool h3 = (g_hover.kind == H_TODAY_ADD_WORD);
+
+    SetTextColor(dc, h1 ? CLR_ACCENT : CLR_TEXT);
+    RECT r5 = { UI_PAD, y, WIN_W - UI_PAD, y + 28 };
+    DrawTextW(dc, L"+ добавить задачу", -1, &r5, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 28;
+
+    SetTextColor(dc, h2 ? CLR_ACCENT : CLR_TEXT);
+    RECT r6 = { UI_PAD, y, WIN_W - UI_PAD, y + 28 };
+    DrawTextW(dc, L"+ добавить практику", -1, &r6, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 28;
+
+    SetTextColor(dc, h3 ? CLR_ACCENT : CLR_TEXT);
+    RECT r7 = { UI_PAD, y, WIN_W - UI_PAD, y + 28 };
+    DrawTextW(dc, L"+ добавить слово", -1, &r7, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 60;
+
+    // "just start." внизу
+    SelectObject(dc, gF.disp20);
+    SetTextColor(dc, CLR_TEXT);
+    RECT r8 = { 0, sy(L.contentH - 120), WIN_W, sy(L.contentH - 80) };
+    DrawTextW(dc, L"just start.", -1, &r8, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    SelectObject(dc, gF.seg10);
+    SetTextColor(dc, CLR_MUTED);
+    RECT r9 = { 0, sy(L.contentH - 80), WIN_W, sy(L.contentH - 55) };
+    DrawTextW(dc, L"добавь первую запись", -1, &r9, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void paintHabitsTab(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    paintHabits(dc, g, L);
+}
+
+static void paintTasksTab(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    paintTaskHeader(dc, L);
+    paintInput(dc, g, L);
+    paintButtons(dc, g, L);
+    paintList(dc, g, L);
+}
+
+static void paintLanguageTab(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    SetBkMode(dc, TRANSPARENT);
+    int y = sy(40);
+
+    SelectObject(dc, gF.disp20);
+    SetTextColor(dc, CLR_ACCENT);
+    RECT r1 = { UI_PAD, y, WIN_W - UI_PAD, y + 40 };
+    DrawTextW(dc, L"ЯЗЫКИ", -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 60;
+
+    SelectObject(dc, gF.seg11);
+    SetTextColor(dc, CLR_MUTED);
+    RECT r2 = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+    DrawTextW(dc, L"скоро: английский, армянский,", -1, &r2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 30;
+
+    RECT r3 = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+    DrawTextW(dc, L"грузинский, китайский", -1, &r3, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void paintPracticeTab(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
+    SetBkMode(dc, TRANSPARENT);
+    int y = sy(16);
+
+    // Заголовок "ПРАКТИКА"
+    SelectObject(dc, gF.disp20);
+    SetTextColor(dc, CLR_ACCENT);
+    RECT r1 = { UI_PAD, y, WIN_W - UI_PAD, y + 40 };
+    DrawTextW(dc, L"ПРАКТИКА", -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 56;
+
+    // Сегодня: X мин
+    int mins = practiceMinutesToday();
+    wchar_t buf[64];
+    swprintf(buf, 64, L"Сегодня: %d мин", mins);
+    SelectObject(dc, gF.disp20);
+    SetTextColor(dc, CLR_TEXT);
+    RECT r2 = { UI_PAD, y, WIN_W - UI_PAD, y + 36 };
+    DrawTextW(dc, buf, -1, &r2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 42;
+
+    // Streak
+    int st = practiceStreak();
+    SelectObject(dc, gF.seg10);
+    SetTextColor(dc, CLR_MUTED);
+    swprintf(buf, 64, L"%d %ls подряд", st, dayWord(st));
+    RECT r3 = { UI_PAD, y, WIN_W - UI_PAD, y + 24 };
+    DrawTextW(dc, buf, -1, &r3, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 40;
+
+    // Пилюли — типы практик
+    SelectObject(dc, gF.seg10);
+    SetTextColor(dc, CLR_MUTED);
+    RECT r4 = { UI_PAD, y, WIN_W - UI_PAD, y + 22 };
+    DrawTextW(dc, L"ТИПЫ ПРАКТИК", -1, &r4, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 30;
+
+    // Отрисовка пилюль (горизонтально, переносом)
+    int px = UI_PAD;
+    int py = y;
+    int pillH = 32;
+    SelectObject(dc, gF.seg10);
+    for (int i = 0; i < PRACTICE_TYPES_COUNT; i++) {
+        SIZE sz;
+        GetTextExtentPoint32W(dc, PRACTICE_TYPES[i], (int)wcslen(PRACTICE_TYPES[i]), &sz);
+        int pillW = sz.cx + 24;
+        if (px + pillW > WIN_W - UI_PAD) {
+            px = UI_PAD; py += pillH + 6;
+        }
+        RECT rp = { px, py, px + pillW, py + pillH };
+        bool hov = (g_hover.kind == H_HAB_ROW && g_hover.idx == 1000 + i);
+        // Фон пилюли
+        gFillRound(g, (float)rp.left, (float)rp.top, (float)pillW, (float)pillH, 16,
+                   hov ? CLR_SURFACE_HOV : CLR_SURFACE);
+        // Текст пилюли
+        SetTextColor(dc, hov ? CLR_ACCENT : CLR_TEXT);
+        DrawTextW(dc, PRACTICE_TYPES[i], -1, &rp,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        px += pillW + 6;
+    }
+    y = py + pillH + 24;
+    g.Flush(Gdiplus::FlushIntentionSync);
+
+    // Кнопка "+ добавить практику"
+    SelectObject(dc, gF.seg11);
+    bool hoverAdd = (g_hover.kind == H_HAB_ADDBTN);
+    SetTextColor(dc, hoverAdd ? CLR_ACCENT : CLR_TEXT);
+    RECT rAdd = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+    DrawTextW(dc, L"+ добавить практику", -1, &rAdd,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 44;
+
+    // Список записей за сегодня
+    wchar_t today[11];
+    getCurrentDate(today);
+    SelectObject(dc, gF.seg9);
+    SetTextColor(dc, CLR_MUTED);
+    RECT rL = { UI_PAD, y, WIN_W - UI_PAD, y + 22 };
+    DrawTextW(dc, L"СЕГОДНЯШНИЕ ЗАПИСИ", -1, &rL,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 28;
+
+    SelectObject(dc, gF.seg11);
+    SetTextColor(dc, CLR_TEXT);
+    int shown = 0;
+    for (int i = practiceCount - 1; i >= 0 && shown < 5; i--) {
+        if (wcscmp(practices[i].date, today) != 0) continue;
+        swprintf(buf, 64, L"%ls — %d мин", practices[i].type, practices[i].minutes);
+        RECT re = { UI_PAD, y, WIN_W - UI_PAD - 30, y + 28 };
+        DrawTextW(dc, buf, -1, &re, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        // × для удаления
+        SetTextColor(dc, CLR_MUTED);
+        RECT rx = { WIN_W - UI_PAD - 20, y, WIN_W - UI_PAD, y + 28 };
+        DrawTextW(dc, L"×", -1, &rx, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SetTextColor(dc, CLR_TEXT);
+        y += 30;
+        shown++;
+    }
+    if (shown == 0) {
+        SelectObject(dc, gF.seg10);
+        SetTextColor(dc, CLR_MUTED);
+        RECT re = { UI_PAD, y, WIN_W - UI_PAD, y + 28 };
+        DrawTextW(dc, L"сегодня ещё не было практики", -1, &re,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        y += 30;
+    }
+    y += 20;
+
+    // Мини-календарь на месяц
+    SelectObject(dc, gF.seg9);
+    SetTextColor(dc, CLR_MUTED);
+    RECT rc1 = { UI_PAD, y, WIN_W - UI_PAD, y + 22 };
+    DrawTextW(dc, L"КАЛЕНДАРЬ МЕСЯЦА", -1, &rc1,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y += 28;
+
+    // Заголовки дней
+    static const wchar_t *wdays[7] = { L"ПН", L"ВТ", L"СР", L"ЧТ", L"ПТ", L"СБ", L"ВС" };
+    int cellW = (WIN_W - UI_PAD * 2) / 7;
+    SelectObject(dc, gF.seg8);
+    for (int i = 0; i < 7; i++) {
+        SetTextColor(dc, CLR_MUTED);
+        RECT rd = { UI_PAD + i * cellW, y, UI_PAD + (i + 1) * cellW, y + 18 };
+        DrawTextW(dc, wdays[i], -1, &rd, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    y += 22;
+
+    // Сетка точек — 31 день
+    time_t t = time(NULL);
+    struct tm *ti = localtime(&t);
+    int month = ti->tm_mon + 1;
+    int year = ti->tm_year + 1900;
+    int daysInMonth = 31;
+    if (month == 2) daysInMonth = 28;
+    else if (month == 4 || month == 6 || month == 9 || month == 11) daysInMonth = 30;
+
+    for (int day = 1; day <= daysInMonth; day++) {
+        int col = (day - 1) % 7;
+        int row = (day - 1) / 7;
+        float cx = (float)(UI_PAD + col * cellW + cellW / 2);
+        float cy = (float)(y + row * 20 + 8);
+
+        // Проверяем, была ли практика в этот день
+        wchar_t dstr[11];
+        swprintf(dstr, 11, L"%02d.%02d.%04d", day, month, year);
+        bool done = false;
+        for (int i = 0; i < practiceCount; i++) {
+            if (wcscmp(practices[i].date, dstr) == 0) { done = true; break; }
+        }
+
+        if (done) {
+            // Заполненная точка
+            Gdiplus::SolidBrush br(gc(CLR_ACCENT));
+            g.FillEllipse(&br, cx - 3, cy - 3, 6.0f, 6.0f);
+        } else {
+            // Контур
+            Gdiplus::Pen p(gc(CLR_DIVIDER), 1.0f);
+            g.DrawEllipse(&p, cx - 3, cy - 3, 6.0f, 6.0f);
+        }
+        g.Flush(Gdiplus::FlushIntentionSync);
+    }
+}
+
 static void paintBody(HDC dc, Gdiplus::Graphics &g) {
     Layout L = getLayout();
     int vh = viewBodyH();
@@ -1499,11 +2000,13 @@ static void paintBody(HDC dc, Gdiplus::Graphics &g) {
     int saved = SaveDC(dc);
     IntersectClipRect(dc, 0, UI_BODY_TOP, WIN_W, g_viewH);
 
-    paintHabits(dc, g, L);
-    paintTaskHeader(dc, L);
-    paintInput(dc, g, L);
-    paintButtons(dc, g, L);
-    paintList(dc, g, L);
+    switch (g_activeTab) {
+        case TAB_TODAY:     paintToday(dc, g, L);       break;
+        case TAB_HABITS:    paintHabitsTab(dc, g, L);   break;
+        case TAB_TASKS:     paintTasksTab(dc, g, L);    break;
+        case TAB_LANGUAGE:  paintLanguageTab(dc, g, L); break;
+        case TAB_PRACTICE:  paintPracticeTab(dc, g, L); break;
+    }
 
     int ms = maxScroll();
     if (ms > 0) {
@@ -1536,9 +2039,9 @@ static void applyMainWindowChrome(HWND hWnd) {
 LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE: {
-            gF.disp36 = makeFont(g_displayFace, 36, TRUE, g_displayWeight);
-            gF.disp20 = makeFont(g_displayFace, 20, TRUE, g_displayWeight);
-            gF.disp16 = makeFont(g_displayFace, 16, TRUE, g_displayWeight);
+            gF.disp36 = makeFont(g_displayFace, 36, FALSE, g_displayWeight);
+            gF.disp20 = makeFont(g_displayFace, 20, FALSE, g_displayWeight);
+            gF.disp16 = makeFont(g_displayFace, 16, FALSE, g_displayWeight);
             gF.seg8   = makeFont(L"Segoe UI",  8, FALSE, FW_NORMAL);
             gF.seg9   = makeFont(L"Segoe UI",  9, FALSE, FW_NORMAL);
             gF.seg10  = makeFont(L"Segoe UI", 10, FALSE, FW_NORMAL);
@@ -1551,6 +2054,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 
             loadFromFile();
             loadHabits();
+            loadPractices();
             refreshList();
             return 0;
         }
@@ -1647,6 +2151,40 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 }
                 case H_HAB_INPUT: g_focus = FOCUS_HABIT; g_caretOn = true; break;
                 case H_HAB_OK:    commitHabit(hWnd); break;
+                case H_TAB:
+                    g_activeTab = h.idx;
+                    g_scroll = 0;
+                    break;
+                case H_TODAY_ADD_TASK:
+                    g_activeTab = TAB_TASKS;
+                    g_scroll = 0;
+                    break;
+                case H_TODAY_ADD_PRACTICE:
+                    g_activeTab = TAB_PRACTICE;
+                    g_scroll = 0;
+                    break;
+                case H_TODAY_ADD_WORD:
+                    g_activeTab = TAB_LANGUAGE;
+                    g_scroll = 0;
+                    break;
+                case H_CALENDAR_ICON:
+                    MessageBoxW(hWnd, L"Календарь скоро!", L"Focus Bitch", MB_OK | MB_ICONINFORMATION);
+                    break;
+                case H_PRACTICE_ADD:
+                    if (g_activeTab == TAB_PRACTICE) {
+                        // Быстрое добавление 30 мин практики "Yoga"
+                        if (practiceCount < MAX_PRACTICES) {
+                            Practice *p = &practices[practiceCount];
+                            p->id = practiceCount + 1;
+                            getCurrentDate(p->date);
+                            wcscpy(p->type, L"Yoga");
+                            p->minutes = 30;
+                            practiceCount++;
+                            savePractices();
+                            InvalidateRect(hWnd, NULL, FALSE);
+                        }
+                    }
+                    break;
                 default:          g_selected = -1; break;
             }
             InvalidateRect(hWnd, NULL, FALSE);
