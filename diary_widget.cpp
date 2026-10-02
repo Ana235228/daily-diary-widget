@@ -32,16 +32,16 @@
 #define WIN_W             560
 #define WIN_H             800
 #define UI_PAD            28
-#define UI_HEADER_H       220
+#define UI_HEADER_H       255
 #define UI_BODY_TOP       UI_HEADER_H
 #define UI_RING_D         88
 #define UI_RING_CY        62
 #define UI_STREAK_Y       114
 #define UI_STREAK_H       26
 #define UI_STRIP_Y        148
-#define UI_TABS_Y         182
-#define UI_TABS_H         32
-#define UI_TABS_Y         182
+#define UI_DAY_PILL_Y     182
+#define UI_DAY_PILL_H     28
+#define UI_TABS_Y         220
 #define UI_TABS_H         32
 #define UI_STRIP_H        28
 #define UI_INPUT_H        52
@@ -357,7 +357,8 @@ enum { H_NONE = 0, H_ADD, H_DEL, H_HIDE, H_INPUT, H_PRIO, H_CHECK, H_CARD,
        H_TAB, H_TODAY_ADD_TASK, H_TODAY_ADD_PRACTICE, H_TODAY_ADD_WORD, H_CALENDAR_ICON,
        H_PRACTICE_ADD, H_PRACTICE_PILL, H_PRACTICE_DEL,
        H_PF_TYPE, H_PF_MIN, H_PF_OK, H_PF_CANCEL, H_PF_PILL,
-       H_LF_ROW, H_LF_OK, H_LF_CANCEL, H_LANG_ADD, H_LANG_DEL, H_LANG_OPEN, H_LANG_BACK };
+       H_LF_ROW, H_LF_OK, H_LF_CANCEL, H_LANG_ADD, H_LANG_DEL, H_LANG_OPEN, H_LANG_BACK,
+       H_DAY_PILL, H_DAY_PREV, H_DAY_NEXT };
 struct Hit { int kind; int idx; int idx2; };
 enum { FOCUS_TASK = 0, FOCUS_HABIT };
 enum { TAB_TODAY = 0, TAB_HABITS, TAB_TASKS, TAB_LANGUAGE, TAB_PRACTICE, TAB_COUNT };
@@ -534,6 +535,66 @@ static bool g_langForm = false;
 static bool g_langSelected[LANG_TEMPLATES_COUNT] = { false, false, false, false };
 static int g_openLang = -1;  // индекс открытого языка (-1 = список)
 
+// Просматриваемый день (-1 = сегодня)
+static int g_viewDay = -1;
+
+// Forward declarations для функций работы с датами
+static int todayDayNumber();
+static int daysFromCivil(int y, int m, int d);
+
+// Получить номер дня для просмотра
+static int viewDayNum() {
+    if (g_viewDay < 0) return todayDayNumber();
+    return g_viewDay;
+}
+
+// Дата просмотра в формате ДД.ММ.ГГГГ
+static void getViewDate(wchar_t *buf) {
+    time_t t0 = time(NULL);
+    struct tm *ti = localtime(&t0);
+    int today = daysFromCivil(ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday);
+    int target = (g_viewDay < 0) ? today : g_viewDay;
+    int diff = target - today;
+
+    // Прибавить diff дней к текущей дате
+    t0 += (time_t)diff * 86400;
+    ti = localtime(&t0);
+    swprintf(buf, 11, L"%02d.%02d.%04d",
+             ti->tm_mday, ti->tm_mon + 1, ti->tm_year + 1900);
+}
+
+// Проверка — просматриваем сегодня?
+static bool isViewingToday() {
+    return (g_viewDay < 0) || (g_viewDay == todayDayNumber());
+}
+
+// Заголовок для шапки: "ПЯТНИЦА, 2 ОКТЯБРЯ" или "СЕГОДНЯ, 2 ОКТЯБРЯ"
+static void getViewHeaderDate(wchar_t *buf, int n) {
+    static const wchar_t *wd[] = { L"ВОСКРЕСЕНЬЕ", L"ПОНЕДЕЛЬНИК", L"ВТОРНИК",
+        L"СРЕДА", L"ЧЕТВЕРГ", L"ПЯТНИЦА", L"СУББОТА" };
+    static const wchar_t *mo[] = { L"января", L"февраля", L"марта", L"апреля",
+        L"мая", L"июня", L"июля", L"августа", L"сентября", L"октября",
+        L"ноября", L"декабря" };
+
+    time_t t0 = time(NULL);
+    struct tm *ti = localtime(&t0);
+    int today = daysFromCivil(ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday);
+    int target = (g_viewDay < 0) ? today : g_viewDay;
+    int diff = target - today;
+
+    t0 += (time_t)diff * 86400;
+    ti = localtime(&t0);
+
+    if (diff == 0)
+        swprintf(buf, n, L"СЕГОДНЯ, %d %ls", ti->tm_mday, mo[ti->tm_mon]);
+    else if (diff == -1)
+        swprintf(buf, n, L"ВЧЕРА, %d %ls", ti->tm_mday, mo[ti->tm_mon]);
+    else if (diff == 1)
+        swprintf(buf, n, L"ЗАВТРА, %d %ls", ti->tm_mday, mo[ti->tm_mon]);
+    else
+        swprintf(buf, n, L"%ls, %d %ls", wd[ti->tm_wday], ti->tm_mday, mo[ti->tm_mon]);
+}
+
 // Состояние формы добавления практики
 static bool g_practiceForm = false;
 static wchar_t g_practiceTypeInput[PRACT_NAME_MAX] = L"";
@@ -582,11 +643,11 @@ static int parseDayNumber(const wchar_t *s) {
 }
 
 static void getTodayStats(int *done, int *total) {
-    wchar_t today[11];
-    getCurrentDate(today);
+    wchar_t d[11];
+    getViewDate(d);
     *done = 0; *total = 0;
     for (int i = 0; i < count; i++) {
-        if (wcscmp(diary[i].date, today) == 0) {
+        if (wcscmp(diary[i].date, d) == 0) {
             (*total)++;
             if (diary[i].done) (*done)++;
         }
@@ -694,11 +755,11 @@ static void loadPractices() {
 
 // Минут практики за сегодня
 static int practiceMinutesToday() {
-    wchar_t today[11];
-    getCurrentDate(today);
+    wchar_t d[11];
+    getViewDate(d);
     int sum = 0;
     for (int i = 0; i < practiceCount; i++)
-        if (wcscmp(practices[i].date, today) == 0)
+        if (wcscmp(practices[i].date, d) == 0)
             sum += practices[i].minutes;
     return sum;
 }
@@ -960,7 +1021,7 @@ void addZapis(HWND hWnd) {
     Zapis *z = &diary[count];
     memset(z, 0, sizeof(Zapis));
     z->id = (count == 0) ? 1 : diary[count - 1].id + 1;
-    getCurrentDate(z->date);
+    getViewDate(z->date);
     getCurrentTime(z->time);
     wcscpy(z->text, g_input);
     z->priority = (g_newPrio >= 1 && g_newPrio <= 3) ? g_newPrio : 2;
@@ -1253,14 +1314,7 @@ static void gDot(Gdiplus::Graphics &g, float cx, float cy, float r, COLORREF c) 
     g.FillEllipse(&b, cx - r, cy - r, r * 2, r * 2);
 }
 static void getHeaderDate(wchar_t *buf, int n) {
-    static const wchar_t *wd[] = { L"Воскресенье", L"Понедельник", L"Вторник",
-        L"Среда", L"Четверг", L"Пятница", L"Суббота" };
-    static const wchar_t *mo[] = { L"января", L"февраля", L"марта", L"апреля",
-        L"мая", L"июня", L"июля", L"августа", L"сентября", L"октября",
-        L"ноября", L"декабря" };
-    time_t t = time(NULL);
-    struct tm *tmi = localtime(&t);
-    swprintf(buf, n, L"%ls, %d %ls", wd[tmi->tm_wday], tmi->tm_mday, mo[tmi->tm_mon]);
+    getViewHeaderDate(buf, n);
 }
 // ===== Мелкие рисовалки =====
 static void gCheck(Gdiplus::Graphics &g, float cx, float cy, float s) {
@@ -1358,6 +1412,9 @@ static void cancelPracticeForm();
 static void commitPracticeForm();
 // Forward declarations для календаря и кнопок TODAY
 static RECT rcCalendarIcon();
+static RECT rcDayPill(int i);
+static RECT rcDayPrev();
+static RECT rcDayNext();
 static RECT rcTodayAddTask(const Layout &L);
 static RECT rcTodayAddPractice(const Layout &L);
 static RECT rcTodayAddWord(const Layout &L);
@@ -1403,6 +1460,14 @@ static Hit hitTest(int x, int y) {
     if (ptIn(calIcon, x, y)) {
         h.kind = H_CALENDAR_ICON;
         return h;
+    }
+
+    if (ptIn(rcDayPrev(), x, y)) { h.kind = H_DAY_PREV; return h; }
+    if (ptIn(rcDayNext(), x, y)) { h.kind = H_DAY_NEXT; return h; }
+    for (int i = 0; i < 7; i++) {
+        if (ptIn(rcDayPill(i), x, y)) {
+            h.kind = H_DAY_PILL; h.idx = i; return h;
+        }
     }
 
     if (y < UI_BODY_TOP) return h;
@@ -1858,12 +1923,111 @@ static void paintWeekStrip(HDC dc, Gdiplus::Graphics &g) {
     }
 }
 
+// ===== Пилюли дней =====
+static RECT rcDayPill(int i) {
+    int arrowW = 30;
+    int availW = WIN_W - UI_PAD * 2 - arrowW * 2 - 12;
+    int cellW = availW / 7;
+    int x = UI_PAD + arrowW + 6 + i * cellW;
+    RECT r = { x, UI_DAY_PILL_Y, x + cellW - 2, UI_DAY_PILL_Y + UI_DAY_PILL_H };
+    return r;
+}
+static RECT rcDayPrev() {
+    RECT r = { UI_PAD, UI_DAY_PILL_Y, UI_PAD + 30, UI_DAY_PILL_Y + UI_DAY_PILL_H };
+    return r;
+}
+static RECT rcDayNext() {
+    RECT r = { WIN_W - UI_PAD - 30, UI_DAY_PILL_Y, WIN_W - UI_PAD, UI_DAY_PILL_Y + UI_DAY_PILL_H };
+    return r;
+}
+
+static void getPillDate(int i, wchar_t *buf, int *dayNum) {
+    int viewDay = viewDayNum();
+    time_t t0 = time(NULL);
+    struct tm *ti = localtime(&t0);
+    int today = daysFromCivil(ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday);
+    int diff = viewDay - today;
+    t0 += (time_t)diff * 86400;
+    ti = localtime(&t0);
+    int wday = (ti->tm_wday + 6) % 7;
+    int mondayOffset = -wday;
+    t0 += (time_t)(mondayOffset + i) * 86400;
+    ti = localtime(&t0);
+    if (buf) swprintf(buf, 11, L"%02d.%02d.%04d",
+             ti->tm_mday, ti->tm_mon + 1, ti->tm_year + 1900);
+    if (dayNum) *dayNum = daysFromCivil(ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday);
+}
+
+static const wchar_t *shortDayName(int i) {
+    static const wchar_t *names[7] = { L"ПН", L"ВТ", L"СР", L"ЧТ", L"ПТ", L"СБ", L"ВС" };
+    return names[i];
+}
+
+static void paintDayPills(HDC dc, Gdiplus::Graphics &g) {
+    SetBkMode(dc, TRANSPARENT);
+
+    SelectObject(dc, gF.seg11);
+    bool hovPrev = (g_hover.kind == H_DAY_PREV);
+    bool hovNext = (g_hover.kind == H_DAY_NEXT);
+    SetTextColor(dc, hovPrev ? CLR_TEXT : CLR_ACCENT);
+    RECT rp = rcDayPrev();
+    DrawTextW(dc, L"<", -1, &rp, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(dc, hovNext ? CLR_TEXT : CLR_ACCENT);
+    RECT rn = rcDayNext();
+    DrawTextW(dc, L">", -1, &rn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    int viewDay = viewDayNum();
+    int todayNum = todayDayNumber();
+
+    for (int i = 0; i < 7; i++) {
+        RECT r = rcDayPill(i);
+        int pillDay = 0;
+        getPillDate(i, NULL, &pillDay);
+
+        bool isCurrent = (pillDay == viewDay);
+        bool isToday = (pillDay == todayNum);
+        bool hov = (g_hover.kind == H_DAY_PILL && g_hover.idx == i);
+
+        if (isCurrent) {
+            gFillRound(g, (float)r.left, (float)r.top,
+                       (float)(r.right - r.left), (float)(r.bottom - r.top), 6,
+                       CLR_SURFACE);
+        } else if (hov) {
+            gFillRound(g, (float)r.left, (float)r.top,
+                       (float)(r.right - r.left), (float)(r.bottom - r.top), 6,
+                       CLR_SURFACE_HOV);
+        }
+        g.Flush(Gdiplus::FlushIntentionSync);
+
+        // День недели
+        SelectObject(dc, gF.seg8);
+        SetTextColor(dc, isCurrent ? CLR_ACCENT : CLR_MUTED);
+        RECT r1 = { r.left, r.top + 2, r.right, r.top + 14 };
+        DrawTextW(dc, shortDayName(i), -1, &r1, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        // Число
+        time_t t0 = time(NULL);
+        struct tm *ti = localtime(&t0);
+        int today = daysFromCivil(ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday);
+        int diff = pillDay - today;
+        t0 += (time_t)diff * 86400;
+        ti = localtime(&t0);
+
+        wchar_t num[8];
+        swprintf(num, 8, L"%d", ti->tm_mday);
+        SelectObject(dc, gF.seg9);
+        SetTextColor(dc, isCurrent ? CLR_TEXT : (isToday ? CLR_ACCENT : CLR_MUTED));
+        RECT r2 = { r.left, r.top + 13, r.right, r.bottom };
+        DrawTextW(dc, num, -1, &r2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
 static void paintHeader(HDC dc, Gdiplus::Graphics &g) {
     fillRectColor(dc, 0, 0, WIN_W, UI_HEADER_H, CLR_BG);
 
     paintRing(dc, g);
     paintStreak(dc, g);
-    paintWeekStrip(dc, g);
+    paintDayPills(dc, g);
 
     wchar_t d[64];
     getHeaderDate(d, 64);
@@ -3154,6 +3318,25 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                     g_openLang = -1;
                     g_scroll = 0;
                     break;
+                case H_DAY_PILL: {
+                    int pillDay = 0;
+                    getPillDate(h.idx, NULL, &pillDay);
+                    g_viewDay = pillDay;
+                    g_scroll = 0;
+                    break;
+                }
+                case H_DAY_PREV: {
+                    int vd = viewDayNum();
+                    g_viewDay = vd - 7;
+                    g_scroll = 0;
+                    break;
+                }
+                case H_DAY_NEXT: {
+                    int vd = viewDayNum();
+                    g_viewDay = vd + 7;
+                    g_scroll = 0;
+                    break;
+                }
                 case H_PF_TYPE:
                     g_practiceField = 0;
                     break;
