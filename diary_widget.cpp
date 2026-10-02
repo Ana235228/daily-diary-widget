@@ -56,6 +56,9 @@
 #define MAX_LANGUAGES     10
 #define LANG_NAME_MAX     32
 #define LANG_GOAL_MAX     64
+#define MAX_WORDS         500
+#define WORD_ORIG_MAX     64
+#define WORD_TRANS_MAX    64
 #define PRACT_NAME_MAX    32
 #define HAB_NAME_MAX      64
 #define ID_TIMER_CARET    2
@@ -354,7 +357,7 @@ enum { H_NONE = 0, H_ADD, H_DEL, H_HIDE, H_INPUT, H_PRIO, H_CHECK, H_CARD,
        H_TAB, H_TODAY_ADD_TASK, H_TODAY_ADD_PRACTICE, H_TODAY_ADD_WORD, H_CALENDAR_ICON,
        H_PRACTICE_ADD, H_PRACTICE_PILL, H_PRACTICE_DEL,
        H_PF_TYPE, H_PF_MIN, H_PF_OK, H_PF_CANCEL, H_PF_PILL,
-       H_LF_ROW, H_LF_OK, H_LF_CANCEL, H_LANG_ADD };
+       H_LF_ROW, H_LF_OK, H_LF_CANCEL, H_LANG_ADD, H_LANG_DEL, H_LANG_OPEN, H_LANG_BACK };
 struct Hit { int kind; int idx; int idx2; };
 enum { FOCUS_TASK = 0, FOCUS_HABIT };
 enum { TAB_TODAY = 0, TAB_HABITS, TAB_TASKS, TAB_LANGUAGE, TAB_PRACTICE, TAB_COUNT };
@@ -420,6 +423,97 @@ static Language languages[MAX_LANGUAGES];
 static int languageCount = 0;
 static const wchar_t *LANGUAGES_FILE = L"languages.dat";
 
+// ===== Words =====
+struct Word {
+    int id;
+    int languageId;             // к какому языку (id)
+    wchar_t original[WORD_ORIG_MAX];
+    wchar_t transcription[WORD_TRANS_MAX];
+    wchar_t translation[WORD_TRANS_MAX];
+};
+struct WordFileHeader { int version; int count; };
+
+static Word words[MAX_WORDS];
+static int wordCount = 0;
+static const wchar_t *WORDS_FILE = L"words.dat";
+
+// ===== Шаблоны слов (добавляются при добавлении языка) =====
+struct WordTemplate {
+    const wchar_t *orig;
+    const wchar_t *trans;
+    const wchar_t *mean;
+};
+
+// Английский — 20 слов
+static const WordTemplate WORDS_EN[] = {
+    { L"hello",       L"/хэлло́у/",       L"привет" },
+    { L"thrive",      L"/срайв/",         L"процветать" },
+    { L"focus",       L"/фо́кус/",         L"фокус, сосредоточиться" },
+    { L"plan",        L"/плэн/",          L"план" },
+    { L"dream",       L"/дрим/",          L"мечта" },
+    { L"life",        L"/лайф/",          L"жизнь" },
+    { L"love",        L"/лав/",           L"любовь" },
+    { L"work",        L"/уорк/",          L"работа, работать" },
+    { L"home",        L"/хоум/",          L"дом" },
+    { L"friend",      L"/френд/",         L"друг" },
+    { L"time",        L"/тайм/",          L"время" },
+    { L"day",         L"/дэй/",           L"день" },
+    { L"night",       L"/найт/",          L"ночь" },
+    { L"morning",     L"/мо́рнинг/",       L"утро" },
+    { L"water",       L"/уо́тер/",         L"вода" },
+    { L"food",        L"/фуд/",           L"еда" },
+    { L"book",        L"/бук/",           L"книга" },
+    { L"music",       L"/мью́зик/",        L"музыка" },
+    { L"smile",       L"/смайл/",         L"улыбка" },
+    { L"soul",        L"/соул/",          L"душа" },
+};
+#define WORDS_EN_COUNT 20
+
+// Армянский — 10 слов
+static const WordTemplate WORDS_HY[] = {
+    { L"Բարև",              L"/баре́в/",              L"привет" },
+    { L"շնորհակալություն",  L"/шноракалутю́н/",       L"спасибо" },
+    { L"Այո",               L"/айо́/",                L"да" },
+    { L"Ոչ",                L"/воч/",                L"нет" },
+    { L"Խնդրում եմ",        L"/хндру́м ем/",          L"пожалуйста" },
+    { L"Բարի լույս",        L"/бари́ луйс/",          L"доброе утро" },
+    { L"Բարի գիշեր",        L"/бари́ гише́р/",         L"доброй ночи" },
+    { L"Ինչպես ես",         L"/инчпе́с эс/",          L"как дела" },
+    { L"Սեր",               L"/сер/",                L"любовь" },
+    { L"Կյանք",             L"/кянк/",               L"жизнь" },
+};
+#define WORDS_HY_COUNT 10
+
+// Грузинский — 10 слов
+static const WordTemplate WORDS_KA[] = {
+    { L"გამარჯობა",       L"/гамарджо́ба/",     L"здравствуйте" },
+    { L"მადლობა",         L"/мадло́ба/",         L"спасибо" },
+    { L"დიახ",            L"/диа́х/",            L"да" },
+    { L"არა",             L"/а́ра/",             L"нет" },
+    { L"გთხოვ",           L"/гтхо́в/",           L"пожалуйста" },
+    { L"დილა მშვიდობისა", L"/ди́ла мшвидо́биса/", L"доброе утро" },
+    { L"ღამე მშვიდობისა", L"/га́ме мшвидо́биса/", L"доброй ночи" },
+    { L"როგორ ხარ",       L"/ро́гор хар/",       L"как дела" },
+    { L"სიყვარული",       L"/сикварю́ли/",       L"любовь" },
+    { L"ცხოვრება",        L"/цховре́ба/",        L"жизнь" },
+};
+#define WORDS_KA_COUNT 10
+
+// Китайский — 10 слов
+static const WordTemplate WORDS_ZH[] = {
+    { L"你好",            L"nǐ hǎo / ниха́о/",     L"привет" },
+    { L"谢谢",            L"xiè xie / сесе́/",     L"спасибо" },
+    { L"是",              L"shì / шы/",           L"да, быть" },
+    { L"不",              L"bù / бу/",            L"нет, не" },
+    { L"请",              L"qǐng / цин/",         L"пожалуйста" },
+    { L"早上好",          L"zǎo shang hǎo / цзаоша́нха́о/", L"доброе утро" },
+    { L"晚安",            L"wǎn ān / вана́нь/",    L"спокойной ночи" },
+    { L"你好吗",          L"nǐ hǎo ma / ниха́о ма/", L"как дела" },
+    { L"爱",              L"ài / ай/",            L"любовь" },
+    { L"生活",            L"shēng huó / шэнхуо́/", L"жизнь" },
+};
+#define WORDS_ZH_COUNT 10
+
 struct LanguageTemplate {
     const wchar_t *name;
     const wchar_t *goal;
@@ -438,6 +532,7 @@ static const LanguageTemplate LANG_TEMPLATES[] = {
 
 static bool g_langForm = false;
 static bool g_langSelected[LANG_TEMPLATES_COUNT] = { false, false, false, false };
+static int g_openLang = -1;  // индекс открытого языка (-1 = список)
 
 // Состояние формы добавления практики
 static bool g_practiceForm = false;
@@ -499,11 +594,23 @@ static void getTodayStats(int *done, int *total) {
 }
 
 static bool dayComplete(const int *dn, int day) {
+    // Проверка 1: все задачи выполнены?
     int total = 0, done = 0;
     for (int i = 0; i < count; i++)
         if (dn[i] == day) { total++; if (diary[i].done) done++; }
-    if (total == 0) return false;
-    return STREAK_REQUIRE_ALL ? (done == total) : (done > 0);
+    bool tasksOk = (total > 0) && (STREAK_REQUIRE_ALL ? (done == total) : (done > 0));
+
+    // Проверка 2: была ли практика в этот день?
+    bool practiceOk = false;
+    for (int i = 0; i < practiceCount; i++) {
+        if (parseDayNumber(practices[i].date) == day) {
+            practiceOk = true;
+            break;
+        }
+    }
+
+    // День засчитан: либо все задачи, либо есть практика
+    return tasksOk || practiceOk;
 }
 
 static int computeStreak() {
@@ -641,6 +748,73 @@ static void loadLanguages() {
     fclose(f);
 }
 
+// ===== Words: сохранение / загрузка =====
+static void saveWords() {
+    FILE *f = _wfopen(WORDS_FILE, L"wb");
+    if (!f) return;
+    WordFileHeader h = { 1, wordCount };
+    fwrite(&h, sizeof(h), 1, f);
+    fwrite(words, sizeof(Word), wordCount, f);
+    fclose(f);
+}
+
+static void loadWords() {
+    wordCount = 0;
+    FILE *f = _wfopen(WORDS_FILE, L"rb");
+    if (!f) return;
+    WordFileHeader h;
+    if (fread(&h, sizeof(h), 1, f) == 1 && h.version == 1 && h.count >= 0) {
+        if (h.count > MAX_WORDS) h.count = MAX_WORDS;
+        wordCount = (int)fread(words, sizeof(Word), h.count, f);
+        for (int i = 0; i < wordCount; i++) {
+            words[i].original[WORD_ORIG_MAX - 1] = 0;
+            words[i].transcription[WORD_TRANS_MAX - 1] = 0;
+            words[i].translation[WORD_TRANS_MAX - 1] = 0;
+        }
+    }
+    fclose(f);
+}
+
+// Добавить слова для конкретного языка
+static void addWordsForLanguage(int langId, const wchar_t *langName) {
+    // Уже есть слова для этого языка?
+    bool exists = false;
+    for (int i = 0; i < wordCount; i++) {
+        if (words[i].languageId == langId) { exists = true; break; }
+    }
+    if (exists) return;
+
+    const WordTemplate *tmpl = NULL;
+    int tmplCount = 0;
+
+    if (wcscmp(langName, L"АНГЛИЙСКИЙ") == 0) {
+        tmpl = WORDS_EN; tmplCount = WORDS_EN_COUNT;
+    } else if (wcscmp(langName, L"АРМЯНСКИЙ") == 0) {
+        tmpl = WORDS_HY; tmplCount = WORDS_HY_COUNT;
+    } else if (wcscmp(langName, L"ГРУЗИНСКИЙ") == 0) {
+        tmpl = WORDS_KA; tmplCount = WORDS_KA_COUNT;
+    } else if (wcscmp(langName, L"КИТАЙСКИЙ") == 0) {
+        tmpl = WORDS_ZH; tmplCount = WORDS_ZH_COUNT;
+    }
+
+    if (!tmpl) return;
+
+    for (int i = 0; i < tmplCount && wordCount < MAX_WORDS; i++) {
+        Word *w = &words[wordCount];
+        w->id = wordCount + 1;
+        w->languageId = langId;
+        wcsncpy(w->original, tmpl[i].orig, WORD_ORIG_MAX - 1);
+        w->original[WORD_ORIG_MAX - 1] = 0;
+        wcsncpy(w->transcription, tmpl[i].trans, WORD_TRANS_MAX - 1);
+        w->transcription[WORD_TRANS_MAX - 1] = 0;
+        wcsncpy(w->translation, tmpl[i].mean, WORD_TRANS_MAX - 1);
+        w->translation[WORD_TRANS_MAX - 1] = 0;
+        wordCount++;
+    }
+    saveWords();
+}
+
+
 
 
 struct Layout {
@@ -661,6 +835,37 @@ static Layout getLayout() {
     L.listY    = y;
     int listH  = count > 0 ? count * UI_ROW - UI_CARD_GAP : 250;
     L.contentH = y + listH + 24;
+
+    // Для LANGUAGE — переопределяем contentH
+    if (g_activeTab == TAB_LANGUAGE) {
+        if (g_openLang >= 0 && g_openLang < languageCount) {
+            // Сводка языка: header + название + цель + прогресс + статистика + слова
+            int langId = languages[g_openLang].id;
+            int wc = 0;
+            for (int i = 0; i < wordCount; i++)
+                if (words[i].languageId == langId) wc++;
+            int h = 50 + 70 + 50 + 22 + 30 + 50 + 40;
+            h += wc * 56;
+            h += 60;
+            L.contentH = h;
+        } else {
+            // Список языков
+            int h = 56 + (languageCount > 0 ? languageCount * 116 : 130) + 60;
+            L.contentH = h;
+        }
+    }
+
+    // Для PRACTICE — тоже считаем
+    if (g_activeTab == TAB_PRACTICE) {
+        if (g_practiceForm) {
+            L.contentH = 450;
+        } else {
+            // ПРАКТИКА: заголовок + сводка + типы + кнопка + список + календарь
+            int h = 56 + 42 + 40 + 30 + 80 + 44 + 28 + 5 * 30 + 28 + 7 * 20 + 60;
+            L.contentH = h;
+        }
+    }
+
     return L;
 }
 
@@ -1135,6 +1340,9 @@ static int practiceMinutesToday();
 static int practiceStreak();
 static void saveLanguages();
 static void loadLanguages();
+static void saveWords();
+static void loadWords();
+static void addWordsForLanguage(int langId, const wchar_t *langName);
 static void cancelLangForm();
 static void commitLangForm();
 static RECT rcLfRow(int i);
@@ -1209,16 +1417,42 @@ static Hit hitTest(int x, int y) {
 
     // Клики на вкладке LANGUAGE
     if (g_activeTab == TAB_LANGUAGE) {
-        // Кнопка "+ добавить язык" — после списка языков
-        int y = sy(16) + 56;  // заголовок
+        // === Если открыта сводка языка ===
+        if (g_openLang >= 0 && g_openLang < languageCount) {
+            RECT rBack = { UI_PAD, sy(16), UI_PAD + 100, sy(16) + 30 };
+            if (ptIn(rBack, x, y)) {
+                h.kind = H_LANG_BACK;
+                return h;
+            }
+            return h;
+        }
+
+        // === Список языков ===
+        int ya = sy(16) + 56;  // ya — позиция отрисовки, y — координата клика
         if (languageCount == 0) {
-            y += 130;  // заглушка
+            ya += 130;
         } else {
             for (int i = 0; i < languageCount; i++) {
-                y += 36 + 26 + 6 + 8 + 40;  // name + goal + bar + words
+                int yRow = ya;
+                // Зона × — справа сверху
+                RECT rx = { WIN_W - UI_PAD - 32, yRow - 4, WIN_W - UI_PAD + 4, yRow + 30 };
+                if (ptIn(rx, x, y)) {
+                    h.kind = H_LANG_DEL;
+                    h.idx = i;
+                    return h;
+                }
+                // Зона клика на весь язык
+                RECT rRow = { UI_PAD, yRow, WIN_W - UI_PAD, yRow + 116 };
+                if (ptIn(rRow, x, y)) {
+                    h.kind = H_LANG_OPEN;
+                    h.idx = i;
+                    return h;
+                }
+                ya += 116;
             }
         }
-        RECT rAdd = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+        // Кнопка "+ добавить язык"
+        RECT rAdd = { UI_PAD, ya, WIN_W - UI_PAD, ya + 30 };
         if (ptIn(rAdd, x, y)) {
             h.kind = H_LANG_ADD;
             return h;
@@ -2069,9 +2303,12 @@ static void commitLangForm() {
         lang->wordsTotal = LANG_TEMPLATES[i].wordsTotal;
         lang->streakDays = LANG_TEMPLATES[i].streakDays;
         languageCount++;
+        // Добавляем слова для нового языка
+        addWordsForLanguage(lang->id, lang->name);
     }
     saveLanguages();
     cancelLangForm();
+    g_openLang = -1;
 }
 
 static RECT rcLfRow(int i) {
@@ -2164,17 +2401,135 @@ static void paintLanguageTab(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
         paintLangForm(dc, g);
         return;
     }
+
+    // === Сводка одного языка ===
+    if (g_openLang >= 0 && g_openLang < languageCount) {
+        Language *lang = &languages[g_openLang];
+        SetBkMode(dc, TRANSPARENT);
+
+        // Кнопка "← назад"
+        SelectObject(dc, gF.seg11);
+        bool hovBack = (g_hover.kind == H_LANG_BACK);
+        SetTextColor(dc, hovBack ? CLR_TEXT : CLR_ACCENT);
+        RECT rb = { UI_PAD, sy(16), UI_PAD + 100, sy(16) + 30 };
+        DrawTextW(dc, L"← назад", -1, &rb, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        int y = sy(16) + 50;
+
+        // Название языка — огромно
+        SelectObject(dc, gF.disp36);
+        SetTextColor(dc, CLR_TEXT);
+        RECT rn = { UI_PAD, y, WIN_W - UI_PAD, y + 60 };
+        DrawTextW(dc, lang->name, -1, &rn, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        y += 70;
+
+        // Цель — крупно
+        SelectObject(dc, gF.seg11);
+        SetTextColor(dc, CLR_MUTED);
+        RECT rg = { UI_PAD, y, WIN_W - UI_PAD, y + 26 };
+        DrawTextW(dc, lang->goal, -1, &rg, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        y += 50;
+
+        // Большая полоса прогресса
+        int barW = WIN_W - UI_PAD * 2;
+        int barH = 12;
+        gFillRound(g, (float)UI_PAD, (float)y, (float)barW, (float)barH, 6, CLR_DIVIDER);
+        int fill = barW * lang->progress / 100;
+        if (fill > 0) {
+            gFillRound(g, (float)UI_PAD, (float)y, (float)fill, (float)barH, 6, CLR_ACCENT);
+        }
+        g.Flush(Gdiplus::FlushIntentionSync);
+        y += barH + 10;
+
+        // Процент справа
+        wchar_t buf[32];
+        swprintf(buf, 32, L"%d%%", lang->progress);
+        SelectObject(dc, gF.disp20);
+        SetTextColor(dc, CLR_ACCENT);
+        RECT rp = { WIN_W - UI_PAD - 100, y - barH - 10, WIN_W - UI_PAD, y - barH + 20 };
+        DrawTextW(dc, buf, -1, &rp, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+        y += 30;
+
+        // Статистика
+        SelectObject(dc, gF.seg11);
+        SetTextColor(dc, CLR_TEXT);
+        swprintf(buf, 32, L"%d слов", lang->wordsTotal);
+        RECT rw = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+        DrawTextW(dc, buf, -1, &rw, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        SelectObject(dc, gF.seg10);
+        SetTextColor(dc, CLR_MUTED);
+        swprintf(buf, 32, L"%d дней streak", lang->streakDays);
+        RECT rst = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+        DrawTextW(dc, buf, -1, &rst, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+        y += 50;
+
+        // === Секция слов ===
+        // Считаем слова этого языка
+        int myLangId = lang->id;
+        int wordCountForLang = 0;
+        for (int i = 0; i < wordCount; i++) {
+            if (words[i].languageId == myLangId) wordCountForLang++;
+        }
+
+        SelectObject(dc, gF.seg10);
+        SetTextColor(dc, CLR_MUTED);
+        wchar_t bufHdr[64];
+        swprintf(bufHdr, 64, L"СЛОВА (%d)", wordCountForLang);
+        RECT rsl = { UI_PAD, y, WIN_W - UI_PAD, y + 24 };
+        DrawTextW(dc, bufHdr, -1, &rsl, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        y += 32;
+
+        if (wordCountForLang == 0) {
+            SelectObject(dc, gF.seg11);
+            SetTextColor(dc, CLR_MUTED);
+            RECT rse = { UI_PAD, y, WIN_W - UI_PAD, y + 30 };
+            DrawTextW(dc, L"слова пока не добавлены", -1, &rse,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        } else {
+            // Отрисовка слов
+            int shown = 0;
+            for (int i = 0; i < wordCount; i++) {
+                if (words[i].languageId != myLangId) continue;
+
+                // Оригинал — крупно
+                SelectObject(dc, gF.seg11);
+                SetTextColor(dc, CLR_TEXT);
+                RECT ro = { UI_PAD, y, WIN_W - UI_PAD, y + 26 };
+                DrawTextW(dc, words[i].original, -1, &ro,
+                          DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                y += 26;
+
+                // Транскрипция · перевод — мелким
+                SelectObject(dc, gF.seg9);
+                SetTextColor(dc, CLR_MUTED);
+                wchar_t bufWord[128];
+                swprintf(bufWord, 128, L"%ls · %ls",
+                         words[i].transcription, words[i].translation);
+                RECT rw = { UI_PAD, y, WIN_W - UI_PAD, y + 20 };
+                DrawTextW(dc, bufWord, -1, &rw,
+                          DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                y += 30;
+
+                shown++;
+            }
+        }
+
+        return;
+    }
+
+    // === Список языков ===
     SetBkMode(dc, TRANSPARENT);
     int y = sy(16);
 
-    // Заголовок "ЯЗЫКИ"
     SelectObject(dc, gF.disp20);
     SetTextColor(dc, CLR_ACCENT);
     RECT r1 = { UI_PAD, y, WIN_W - UI_PAD, y + 40 };
     DrawTextW(dc, L"ЯЗЫКИ", -1, &r1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     y += 56;
 
-    // Если языков нет — показать подсказку
     if (languageCount == 0) {
         SelectObject(dc, gF.seg11);
         SetTextColor(dc, CLR_MUTED);
@@ -2190,53 +2545,60 @@ static void paintLanguageTab(HDC dc, Gdiplus::Graphics &g, const Layout &L) {
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         y += 130;
     } else {
-        // Список языков
         for (int i = 0; i < languageCount; i++) {
             Language *lang = &languages[i];
+            bool hov = (g_hover.kind == H_LANG_OPEN && g_hover.idx == i);
 
-            // Название языка — крупно
+            // Фон при hover
+            if (hov) {
+                gFillRound(g, (float)(UI_PAD - 6), (float)(y - 4),
+                           (float)(WIN_W - (UI_PAD - 6) * 2), 110.0f, 8,
+                           CLR_SURFACE_HOV);
+            }
+
+            // Название языка
             SelectObject(dc, gF.disp20);
-            SetTextColor(dc, CLR_TEXT);
+            SetTextColor(dc, hov ? CLR_ACCENT : CLR_TEXT);
             RECT rn = { UI_PAD, y, WIN_W - UI_PAD, y + 34 };
-            DrawTextW(dc, lang->name, -1, &rn,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            DrawTextW(dc, lang->name, -1, &rn, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             y += 36;
 
-            // Цель — мелким
+            // Цель
             SelectObject(dc, gF.seg10);
             SetTextColor(dc, CLR_MUTED);
-            RECT rg = { UI_PAD, y, WIN_W - UI_PAD, y + 22 };
-            DrawTextW(dc, lang->goal, -1, &rg,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            RECT rg = { UI_PAD, y, WIN_W - UI_PAD - 30, y + 22 };
+            DrawTextW(dc, lang->goal, -1, &rg, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+            // × для удаления (справа сверху)
+            bool hovX = (g_hover.kind == H_LANG_DEL && g_hover.idx == i);
+            SetTextColor(dc, hovX ? CLR_ACCENT : CLR_MUTED);
+            RECT rx = { WIN_W - UI_PAD - 24, y - 4, WIN_W - UI_PAD, y + 22 };
+            DrawTextW(dc, L"×", -1, &rx, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
             y += 26;
 
-            // Прогресс-бар: фон
+            // Прогресс-бар
             int barW = WIN_W - UI_PAD * 2;
-            int barH = 6;
-            gFillRound(g, (float)UI_PAD, (float)y, (float)barW, (float)barH, 3.0f, CLR_DIVIDER);
-            // Заполнение
+            gFillRound(g, (float)UI_PAD, (float)y, (float)barW, 6.0f, 3, CLR_DIVIDER);
             int fill = barW * lang->progress / 100;
             if (fill > 0) {
-                gFillRound(g, (float)UI_PAD, (float)y, (float)fill, (float)barH, 3.0f, CLR_ACCENT);
+                gFillRound(g, (float)UI_PAD, (float)y, (float)fill, 6.0f, 3, CLR_ACCENT);
             }
             g.Flush(Gdiplus::FlushIntentionSync);
-            y += barH + 8;
+            y += 14;
 
-            // Слова + streak
+            // Слова + streak + %
             SelectObject(dc, gF.seg9);
             SetTextColor(dc, CLR_MUTED);
             wchar_t buf[64];
             swprintf(buf, 64, L"%d слов · %d дней", lang->wordsTotal, lang->streakDays);
-            RECT rs = { UI_PAD, y, WIN_W - UI_PAD, y + 20 };
-            DrawTextW(dc, buf, -1, &rs,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            RECT rs = { UI_PAD, y, WIN_W - UI_PAD - 60, y + 20 };
+            DrawTextW(dc, buf, -1, &rs, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-            // Процент справа
             swprintf(buf, 64, L"%d%%", lang->progress);
             SetTextColor(dc, CLR_ACCENT);
-            RECT rp = { WIN_W - UI_PAD - 80, y, WIN_W - UI_PAD, y + 20 };
-            DrawTextW(dc, buf, -1, &rp,
-                      DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            RECT rp = { WIN_W - UI_PAD - 60, y, WIN_W - UI_PAD, y + 20 };
+            DrawTextW(dc, buf, -1, &rp, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
             y += 40;
         }
@@ -2641,6 +3003,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             loadHabits();
             loadPractices();
             loadLanguages();
+            loadWords();
             refreshList();
             return 0;
         }
@@ -2769,7 +3132,27 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                     break;
                 case H_LANG_ADD:
                     g_langForm = true;
+                    g_openLang = -1;
                     for (int i = 0; i < LANG_TEMPLATES_COUNT; i++) g_langSelected[i] = false;
+                    break;
+                case H_LANG_DEL:
+                    if (h.idx >= 0 && h.idx < languageCount) {
+                        for (int i = h.idx; i < languageCount - 1; i++)
+                            languages[i] = languages[i + 1];
+                        languageCount--;
+                        if (g_openLang >= languageCount) g_openLang = -1;
+                        saveLanguages();
+                    }
+                    break;
+                case H_LANG_OPEN:
+                    if (h.idx >= 0 && h.idx < languageCount) {
+                        g_openLang = h.idx;
+                        g_scroll = 0;
+                    }
+                    break;
+                case H_LANG_BACK:
+                    g_openLang = -1;
+                    g_scroll = 0;
                     break;
                 case H_PF_TYPE:
                     g_practiceField = 0;
